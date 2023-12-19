@@ -1,0 +1,45 @@
+[project]
+name = "coverage-sh"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Kilian Lackhove", email = "kilian@lackhove.de" }
+]
+dependencies = [
+    "coverage>=7.3.3",
+]
+readme = "README.md"
+requires-python = ">= 3.8"
+license = { text = "MIT" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "ruff>=0.1.8",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["coverage_sh"]
+
+
+[tool.ruff]
+
+# Same as Black.
+line-length = 88
+indent-width = 4
+
+# Assume Python 3.8
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = []
+
+
