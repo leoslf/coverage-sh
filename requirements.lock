@@ -9,3 +9,5 @@
 -e file:.
 coverage==7.3.3
 python-magic==0.4.27
+tree-sitter==0.20.4
+tree-sitter-languages==1.8.0

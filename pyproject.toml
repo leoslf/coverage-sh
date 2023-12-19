@@ -8,6 +8,7 @@ authors = [
 dependencies = [
     "coverage>=7.3.3",
     "python-magic>=0.4.27",
+    "tree-sitter-languages>=1.8.0",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
