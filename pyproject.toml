@@ -7,6 +7,7 @@ authors = [
 ]
 dependencies = [
     "coverage>=7.3.3",
+    "python-magic>=0.4.27",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -20,6 +21,9 @@ build-backend = "hatchling.build"
 managed = true
 dev-dependencies = [
     "ruff>=0.1.8",
+    "mypy>=1.7.1",
+    "pytest>=7.4.3",
+    "setuptools>=69.0.2",
 ]
 
 [tool.hatch.metadata]

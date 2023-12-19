@@ -1,0 +1,2 @@
+[tool.coverage.run]
+plugins = [ "coverage_sh" ]
