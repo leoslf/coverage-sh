@@ -19,7 +19,7 @@ def test_ShellPlugin_file_reporter():
 
 
 def test_ShellPlugin_find_executable_files(examples_dir):
-    plugin = ShellPlugin()
+    plugin = ShellPlugin({})
 
     executable_files = plugin.find_executable_files(str(examples_dir))
 

@@ -1,56 +1,45 @@
 import json
-import os
+import shutil
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
-from tests.resources.testproject.main import main
-
-
-def test_debug(resources_dir):
-    proc = subprocess.run([sys.executable, "-m", "coverage", "run", "main.py"], cwd=testproject_dir)
-
-
 
 @pytest.fixture
-def testproject_dir(resources_dir, tmp_path):
-    tp =  resources_dir / "testproject"
-    tp.joinpath(".coverage").unlink(missing_ok=True)
-    tp.joinpath("coverage.json").unlink(missing_ok=True)
+def dummy_project_dir(resources_dir, tmp_path):
+    source = resources_dir / "testproject"
+    dest = tmp_path / "testproject"
+    shutil.copytree(source, dest)
 
-    return tp
+    # source.joinpath(".coverage").unlink(missing_ok=True)
+    # source.joinpath("coverage.json").unlink(missing_ok=True)
 
-def test_run_and_report(testproject_dir):
-    coverage_file_path = testproject_dir.joinpath(".coverage")
-
-    env = os.environ.copy()
-    env["COVERAGE_PROCESS_START"] = str(testproject_dir / "pyproject.toml")
+    return dest
 
 
+def test_run_and_report(dummy_project_dir):
+    coverage_file_path = dummy_project_dir.joinpath(".coverage")
     assert not coverage_file_path.is_file()
 
-    proc = subprocess.run([sys.executable,"/home/kilian/code/coverage-sh/tests/resources/testproject/main.py"])
+    proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "run", str(dummy_project_dir / "main.py")],
+        cwd=dummy_project_dir,
+        capture_output=True,
+        text=True,
+    )
 
-    assert  proc.returncode == 0
-    assert  coverage_file_path.is_file()
+    assert proc.returncode == 0
+    assert "hello from shell" in proc.stdout
+    assert coverage_file_path.is_file()
 
-    proc = subprocess.run(["coverage", "json"], cwd=testproject_dir)
+    proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "json"], cwd=dummy_project_dir
+    )
 
-    coverage_json = json.loads(testproject_dir.joinpath("coverage.json").read_text())
-    # assert coverage_json == {}
+    coverage_json = json.loads(dummy_project_dir.joinpath("coverage.json").read_text())
+    assert coverage_json == {}
 
-
-def test_hacky():
-    import coverage
-
-    cov = coverage.Coverage()
-    cov.start()
-
-    main()
-
-    cov.stop()
-
-
-
+    proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "html"], cwd=dummy_project_dir
+    )
