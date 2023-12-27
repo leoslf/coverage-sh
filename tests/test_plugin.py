@@ -1,8 +1,10 @@
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from coverage_sh import ShellPlugin
+from coverage_sh.plugin import PatchedPopen
 
 
 @pytest.fixture()
@@ -27,3 +29,15 @@ def test_ShellPlugin_find_executable_files(examples_dir):
         examples_dir / "atom.sh",
         examples_dir / "shell-file.weird.suffix",
     ]
+
+
+def test_patched_popen(resources_dir):
+
+    proc = PatchedPopen(["/bin/bash", resources_dir / "testproject" / "test.sh"], stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, encoding="utf8")
+
+    proc.wait()
+    proc.parse_tracefile()
+    assert proc.stdout.read() == "hello from shell\n"
+    assert proc.stderr.read() == ""
+
