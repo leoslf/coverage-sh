@@ -84,16 +84,12 @@ OriginalPopen = subprocess.Popen
 
 
 class PatchedPopen(OriginalPopen):
-    def get_wrapper(self, executable, tracefile_path):
-        return f"""\
-#!/bin/sh
-echo "inside patch wrapper"
-export BASH_XTRACEFD
-export PS4='COV:::$BASH_SOURCE:::$LINENO:::'
-exec {executable} -x "$@" {{BASH_XTRACEFD}}>>{tracefile_path}
-"""
+
 
     def __init__(self, *args, **kwargs):
+
+        self._tracefile_path = Path.cwd().joinpath(".coverage-sh", f"{os.getpid()}.trace")
+        self._tracefile_path.parent.mkdir(parents=True, exist_ok=True)
 
         # convert args into kwargs
         sig = inspect.signature(subprocess.Popen)
@@ -103,35 +99,39 @@ exec {executable} -x "$@" {{BASH_XTRACEFD}}>>{tracefile_path}
         args : list[str] = kwargs.get("args")
 
         patch_executable = None
-        if (args[0] in (SH_ALIASES)) or executable in (
+        if (args[0] in SH_ALIASES) or executable in (
             SH_ALIASES
         ):
             patch_executable = which("sh")
-        elif ( args[0] in (BASH_ALIASES)) or executable in (
+        elif (args[0] in BASH_ALIASES) or executable in (
             BASH_ALIASES
         ):
             patch_executable = which("bash")
 
         if patch_executable is not None:
-            wrapper = tempfile.NamedTemporaryFile(
-                "w", dir=Path.home() / ".cache", delete=False, suffix=".sh"
-            )
-            try:
-                wrapper.write(
-                    self.get_wrapper(patch_executable, str(get_tracefile_path()))
-                )
-                wrapper.close()
-                os.chmod(wrapper.name, S_IRUSR | S_IWUSR | S_IXUSR)
-                kwargs["executable"] = wrapper.name
+            self._tracefile_path.touch()
+            self._tracefile_fd = os.open(self._tracefile_path, flags=os.O_RDWR | os.O_CREAT)
 
-                super().__init__(*args, **kwargs)
+            env = kwargs.get("env", os.environ.copy())
+            env["BASH_XTRACEFD"] = str(self._tracefile_fd)
+            env["PS4"] = 'COV:::$BASH_SOURCE:::$LINENO:::'
+            kwargs["env"] = env
 
-            finally:
-                os.unlink(wrapper.name)
+            args.insert(1, "-x")
+            kwargs["args"] = args
+
+            pass_fds = list(kwargs.get("pass_fds", ()))
+            pass_fds.append(self._tracefile_fd)
+            kwargs["pass_fds"]= pass_fds
+
+            atexit.register(self.__del__)
+            super().__init__(**kwargs)
 
             return
 
-        super().__init__(*args, **kwargs)
+        super().__init__( **kwargs)
+
+
 
     @staticmethod
     def _parse_tracefile():
@@ -155,6 +155,8 @@ exec {executable} -x "$@" {{BASH_XTRACEFD}}>>{tracefile_path}
 
     def __del__(self):
         self._parse_tracefile()
+        os.close(self._tracefile_fd)
+        self._tracefile_path.unlink()
         del self
 
 

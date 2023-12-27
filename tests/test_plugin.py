@@ -31,13 +31,20 @@ def test_ShellPlugin_find_executable_files(examples_dir):
     ]
 
 
-def test_patched_popen(resources_dir):
+def test_patched_popen(resources_dir, monkeypatch, tmp_path):
+
+    monkeypatch.chdir(tmp_path)
 
     proc = PatchedPopen(["/bin/bash", resources_dir / "testproject" / "test.sh"], stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE, encoding="utf8")
 
     proc.wait()
-    proc.parse_tracefile()
-    assert proc.stdout.read() == "hello from shell\n"
+
     assert proc.stderr.read() == ""
+    assert proc.stdout.read() == "hello from shell\n"
+
+
+    proc._parse_tracefile()
+
+
 
