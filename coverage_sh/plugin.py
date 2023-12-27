@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import inspect
 import os
 import tempfile
 from collections import defaultdict
@@ -93,17 +94,20 @@ exec {executable} -x "$@" {{BASH_XTRACEFD}}>>{tracefile_path}
 """
 
     def __init__(self, *args, **kwargs):
-        executable = None
-        if len(args) > 2 and args[2] is not None:
-            executable = args[2]
-        executable = kwargs.get("executable", executable)
+
+        # convert args into kwargs
+        sig = inspect.signature(subprocess.Popen)
+        kwargs.update(dict(zip(sig.parameters.keys(), args)))
+
+        executable = kwargs.get("executable")
+        args : list[str] = kwargs.get("args")
 
         patch_executable = None
-        if (len(args[0]) > 1 and args[0][0] in (SH_ALIASES)) or executable in (
+        if (args[0] in (SH_ALIASES)) or executable in (
             SH_ALIASES
         ):
             patch_executable = which("sh")
-        elif (len(args[0]) > 1 and args[0][0] in (BASH_ALIASES)) or executable in (
+        elif ( args[0] in (BASH_ALIASES)) or executable in (
             BASH_ALIASES
         ):
             patch_executable = which("bash")
