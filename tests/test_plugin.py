@@ -35,7 +35,8 @@ def test_patched_popen(resources_dir, monkeypatch, tmp_path):
 
     monkeypatch.chdir(tmp_path)
 
-    proc = PatchedPopen(["/bin/bash", resources_dir / "testproject" / "test.sh"], stdout=subprocess.PIPE,
+    test_sh_path = resources_dir / "testproject" / "test.sh"
+    proc = PatchedPopen(["/bin/bash", test_sh_path], stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE, encoding="utf8")
 
     proc.wait()
@@ -44,7 +45,8 @@ def test_patched_popen(resources_dir, monkeypatch, tmp_path):
     assert proc.stdout.read() == "hello from shell\n"
 
 
-    proc._parse_tracefile()
+    line_data = proc._parse_tracefile()
+    assert  {str(test_sh_path): {3}} == dict(line_data)
 
 
 

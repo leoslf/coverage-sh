@@ -76,8 +76,7 @@ class ShellFileReporter(FileReporter):
         return self._executable_lines
 
 
-def get_tracefile_path():
-    return Path.cwd() / ".bash_tracefile"
+
 
 
 OriginalPopen = subprocess.Popen
@@ -87,9 +86,9 @@ class PatchedPopen(OriginalPopen):
 
 
     def __init__(self, *args, **kwargs):
-
         self._tracefile_path = Path.cwd().joinpath(".coverage-sh", f"{os.getpid()}.trace")
         self._tracefile_path.parent.mkdir(parents=True, exist_ok=True)
+        self._tracefile_fd = None
 
         # convert args into kwargs
         sig = inspect.signature(subprocess.Popen)
@@ -109,63 +108,71 @@ class PatchedPopen(OriginalPopen):
             patch_executable = which("bash")
 
         if patch_executable is not None:
-            self._tracefile_path.touch()
-            self._tracefile_fd = os.open(self._tracefile_path, flags=os.O_RDWR | os.O_CREAT)
-
-            env = kwargs.get("env", os.environ.copy())
-            env["BASH_XTRACEFD"] = str(self._tracefile_fd)
-            env["PS4"] = 'COV:::$BASH_SOURCE:::$LINENO:::'
-            kwargs["env"] = env
-
-            args.insert(1, "-x")
-            kwargs["args"] = args
-
-            pass_fds = list(kwargs.get("pass_fds", ()))
-            pass_fds.append(self._tracefile_fd)
-            kwargs["pass_fds"]= pass_fds
-
-            atexit.register(self.__del__)
-            super().__init__(**kwargs)
-
+            self._init_trace(kwargs)
             return
 
         super().__init__( **kwargs)
 
+    def _init_trace(self, kwargs):
+        self._tracefile_path.touch()
+        self._tracefile_fd = os.open(self._tracefile_path, flags=os.O_RDWR | os.O_CREAT)
+
+        env = kwargs.get("env", os.environ.copy())
+        env["BASH_XTRACEFD"] = str(self._tracefile_fd)
+        env["PS4"] = 'COV:::$BASH_SOURCE:::$LINENO:::'
+        kwargs["env"] = env
+
+        args = kwargs.get("args", ())
+        args.insert(1, "-x")
+        kwargs["args"] = args
+
+        pass_fds = list(kwargs.get("pass_fds", ()))
+        pass_fds.append(self._tracefile_fd)
+        kwargs["pass_fds"] = pass_fds
+
+        atexit.register(self._finish_trace)
+
+        super().__init__(**kwargs)
 
 
-    @staticmethod
-    def _parse_tracefile():
-        tracefile = get_tracefile_path()
-        if not tracefile.exists():
-            return
+    def _parse_tracefile(self):
+        if not self._tracefile_path.exists():
+            return {}
 
         line_data = defaultdict(set)
-        with tracefile.open("r") as fd:
+        with self._tracefile_path.open("r") as fd:
             for line in fd:
                 _, path, lineno, _ = line.split(":::")
                 path = Path(path).absolute()
                 line_data[str(path)].add(int(lineno))
 
-        cov = coverage.Coverage.current()
-        if cov is None:
-            raise ValueError("no Coverage object")
-        cov_data = cov.get_data()
-        cov_data.add_lines(line_data)
-        cov_data.write()
+        return line_data
+
+
+    def _write_trace(line_data):
+       cov = coverage.Coverage.current()
+       if cov is None:
+           raise ValueError("no Coverage object")
+       cov_data = cov.get_data()
+       cov_data.add_lines(line_data)
+       cov_data.write()
+
+    def _finish_trace(self):
+        line_data = self._parse_tracefile()
+        self._write_trace(line_data)
+        if self._tracefile_fd is not None:
+            os.close(self._tracefile_fd)
+        self._tracefile_path.unlink(missing_ok=True)
+
 
     def __del__(self):
-        self._parse_tracefile()
-        os.close(self._tracefile_fd)
-        self._tracefile_path.unlink()
+        self._finish_trace()
         del self
 
 
 class ShellPlugin(CoveragePlugin):
     def __init__(self, options: dict[str, str]):
         self.options = options
-
-        self.tracefile_path = get_tracefile_path()
-        self.tracefile_path.unlink(missing_ok=True)
 
         subprocess.Popen = PatchedPopen
 
