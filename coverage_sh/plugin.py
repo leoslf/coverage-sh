@@ -70,6 +70,9 @@ class ShellFileReporter(FileReporter):
             self._parse_ast(child)
 
     def lines(self) -> Set[TLineNo]:
+
+        cov = coverage.Coverage.current()
+
         tree = parser.parse(self.source().encode("utf-8"))
         self._parse_ast(tree.root_node)
 
@@ -149,7 +152,7 @@ class PatchedPopen(OriginalPopen):
         return line_data
 
 
-    def _write_trace(line_data):
+    def _write_trace(self, line_data):
        cov = coverage.Coverage.current()
        if cov is None:
            raise ValueError("no Coverage object")
@@ -163,12 +166,6 @@ class PatchedPopen(OriginalPopen):
         if self._tracefile_fd is not None:
             os.close(self._tracefile_fd)
         self._tracefile_path.unlink(missing_ok=True)
-
-
-    def __del__(self):
-        self._finish_trace()
-        del self
-
 
 class ShellPlugin(CoveragePlugin):
     def __init__(self, options: dict[str, str]):

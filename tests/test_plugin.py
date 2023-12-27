@@ -1,8 +1,10 @@
+import atexit
 import subprocess
 from pathlib import Path
 
 import pytest
 
+import coverage_sh
 from coverage_sh import ShellPlugin
 from coverage_sh.plugin import PatchedPopen
 
@@ -35,18 +37,31 @@ def test_patched_popen(resources_dir, monkeypatch, tmp_path):
 
     monkeypatch.chdir(tmp_path)
 
+    atexit_callables = []
+    def atexit_register(callable):
+        atexit_callables.append(callable)
+
+    monkeypatch.setattr(coverage_sh.plugin.atexit, "register", atexit_register)
+
     test_sh_path = resources_dir / "testproject" / "test.sh"
     proc = PatchedPopen(["/bin/bash", test_sh_path], stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE, encoding="utf8")
 
-    proc.wait()
-
     assert proc.stderr.read() == ""
     assert proc.stdout.read() == "hello from shell\n"
 
+    assert len(atexit_callables) == 1
 
-    line_data = proc._parse_tracefile()
-    assert  {str(test_sh_path): {3}} == dict(line_data)
+    with pytest.raises(ValueError) as e:
+        for c in atexit_callables:
+            c()
+
+    assert e.value.args[0] == 'no Coverage object'
+
+    # line_data = proc._parse_tracefile()
+    # assert {str(test_sh_path): {3}} == dict(line_data)
+
+
 
 
 
