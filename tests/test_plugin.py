@@ -1,4 +1,3 @@
-import atexit
 import subprocess
 from pathlib import Path
 
@@ -34,13 +33,17 @@ def test_ShellPlugin_find_executable_files(examples_dir):
     ]
 
 
-def test_patched_popen(resources_dir, dummy_project_dir,monkeypatch,):
-
+def test_patched_popen(
+    resources_dir,
+    dummy_project_dir,
+    monkeypatch,
+):
     monkeypatch.chdir(dummy_project_dir)
 
     atexit_callables = []
-    def atexit_register(callable):
-        atexit_callables.append(callable)
+
+    def atexit_register(callable_):
+        atexit_callables.append(callable_)
 
     monkeypatch.setattr(coverage_sh.plugin.atexit, "register", atexit_register)
 
@@ -48,8 +51,12 @@ def test_patched_popen(resources_dir, dummy_project_dir,monkeypatch,):
     cov.start()
 
     test_sh_path = resources_dir / "testproject" / "test.sh"
-    proc = PatchedPopen(["/bin/bash", test_sh_path], stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE, encoding="utf8")
+    proc = PatchedPopen(
+        ["/bin/bash", test_sh_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf8",
+    )
     proc.wait()
 
     cov.stop()

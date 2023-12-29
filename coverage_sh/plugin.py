@@ -3,25 +3,24 @@ from __future__ import annotations
 import atexit
 import inspect
 import os
-from socket import gethostname
+import subprocess
 from collections import defaultdict
 from pathlib import Path
-from random import randint
 from shutil import which
+from typing import TYPE_CHECKING, Any, Iterable
 
 import coverage
-from coverage.sqldata import filename_suffix
-
-SH_ALIASES = {"sh", "/bin/sh", "/usr/bin/sh", which("sh")}
-
-BASH_ALIASES = {"bash", "/bin/bash", "/usr/bin/bash", which("bash")}
-from typing import Iterable, Optional, Set, Union
-
 import magic
 from coverage import CoveragePlugin, FileReporter, FileTracer
-from coverage.types import TLineNo
-import subprocess
+from coverage.sqldata import filename_suffix
+from tree_sitter_languages import get_parser
 
+if TYPE_CHECKING:
+    from coverage.types import TLineNo
+    from tree_sitter import Node
+
+SH_ALIASES = {"sh", "/bin/sh", "/usr/bin/sh", which("sh")}
+BASH_ALIASES = {"bash", "/bin/bash", "/usr/bin/bash", which("bash")}
 EXECUTABLE_NODE_TYPES = {
     "subshell",
     "redirected_statement",
@@ -41,16 +40,13 @@ EXECUTABLE_NODE_TYPES = {
     "list",
     "compound_statement",
 }
-
 SUPPORTED_MIME_TYPES = ("text/x-shellscript",)
-
-from tree_sitter_languages import get_parser
 
 parser = get_parser("bash")
 
 
 class ShellFileReporter(FileReporter):
-    def __init__(self, filename: str):
+    def __init__(self, filename: str) -> None:
         super().__init__(filename)
 
         self.path = Path(filename)
@@ -63,34 +59,28 @@ class ShellFileReporter(FileReporter):
 
         return self._content
 
-    def _parse_ast(self, node):
+    def _parse_ast(self, node: Node) -> None:
         if node.is_named and node.type in EXECUTABLE_NODE_TYPES:
             self._executable_lines.add(node.start_point[0] + 1)
 
         for child in node.children:
             self._parse_ast(child)
 
-    def lines(self) -> Set[TLineNo]:
-
-        cov = coverage.Coverage.current()
-
+    def lines(self) -> set[TLineNo]:
         tree = parser.parse(self.source().encode("utf-8"))
         self._parse_ast(tree.root_node)
 
         return self._executable_lines
 
 
-
-
-
 OriginalPopen = subprocess.Popen
 
 
 class PatchedPopen(OriginalPopen):
-
-
     def __init__(self, *args, **kwargs):
-        self._tracefile_path = Path.cwd().joinpath(".coverage-sh", f"{os.getpid()}.trace")
+        self._tracefile_path = Path.cwd().joinpath(
+            ".coverage-sh", f"{os.getpid()}.trace"
+        )
         self._tracefile_path.parent.mkdir(parents=True, exist_ok=True)
         self._tracefile_fd = None
         self._data = None
@@ -100,27 +90,22 @@ class PatchedPopen(OriginalPopen):
         kwargs.update(dict(zip(sig.parameters.keys(), args)))
 
         executable = kwargs.get("executable")
-        args : list[str] = kwargs.get("args")
+        args: list[str] = kwargs.get("args")
 
         patch_executable = None
-        if (args[0] in SH_ALIASES) or executable in (
-            SH_ALIASES
-        ):
+        if (args[0] in SH_ALIASES) or executable in SH_ALIASES:
             patch_executable = which("sh")
-        elif (args[0] in BASH_ALIASES) or executable in (
-            BASH_ALIASES
-        ):
+        elif (args[0] in BASH_ALIASES) or executable in BASH_ALIASES:
             patch_executable = which("bash")
 
         cov = coverage.Coverage.current()
-        if cov is not None and  patch_executable is not None:
+        if cov is not None and patch_executable is not None:
             self._init_trace(kwargs)
             return
 
-        super().__init__( **kwargs)
+        super().__init__(**kwargs)
 
-    def _init_trace(self, kwargs):
-
+    def _init_trace(self, kwargs: dict[str, Any]) -> None:
         self._init_data()
 
         self._tracefile_path.touch()
@@ -128,10 +113,10 @@ class PatchedPopen(OriginalPopen):
 
         env = kwargs.get("env", os.environ.copy())
         env["BASH_XTRACEFD"] = str(self._tracefile_fd)
-        env["PS4"] = 'COV:::$BASH_SOURCE:::$LINENO:::'
+        env["PS4"] = "COV:::$BASH_SOURCE:::$LINENO:::"
         kwargs["env"] = env
 
-        args = kwargs.get("args", ())
+        args = list(kwargs.get("args", ()))
         args.insert(1, "-x")
         kwargs["args"] = args
 
@@ -144,9 +129,8 @@ class PatchedPopen(OriginalPopen):
         super().__init__(**kwargs)
 
     @staticmethod
-    def _filename_suffix():
+    def _filename_suffix() -> str:
         return "sh." + filename_suffix(suffix=True)
-
 
     def _init_data(self) -> None:
         if self._data is None:
@@ -156,12 +140,12 @@ class PatchedPopen(OriginalPopen):
                 basename=config.data_file,
                 suffix=self._filename_suffix(),
                 # TODO set these via the plugin config
-                warn=coverage.Coverage.current()._warn,
-                debug=coverage.Coverage.current()._debug,
-                no_disk=coverage.Coverage.current()._no_disk,
+                warn=coverage.Coverage.current()._warn,  # noqa: SLF001
+                debug=coverage.Coverage.current()._debug,  # noqa: SLF001
+                no_disk=coverage.Coverage.current()._no_disk,  # noqa: SLF001
             )
 
-    def _parse_tracefile(self):
+    def _parse_tracefile(self) -> dict[str, set[int]]:
         if not self._tracefile_path.exists():
             return {}
 
@@ -174,13 +158,12 @@ class PatchedPopen(OriginalPopen):
 
         return line_data
 
-
-    def _write_trace(self, line_data):
-        self._data.add_file_tracers({f: "coverage_sh.ShellPlugin" for f in line_data.keys()})
+    def _write_trace(self, line_data: dict[str, set[int]]) -> None:
+        self._data.add_file_tracers({f: "coverage_sh.ShellPlugin" for f in line_data})
         self._data.add_lines(line_data)
         self._data.write()
 
-    def _finish_trace(self):
+    def _finish_trace(self) -> None:
         line_data = self._parse_tracefile()
         self._write_trace(line_data)
 
@@ -200,16 +183,16 @@ class ShellPlugin(CoveragePlugin):
         subprocess.Popen = PatchedPopen
 
     @staticmethod
-    def _is_relevant(path):
+    def _is_relevant(path: Path) -> bool:
         return magic.from_file(path, mime=True) in SUPPORTED_MIME_TYPES
 
-    def file_tracer(self, filename: str) -> Optional[FileTracer]:
+    def file_tracer(self, filename: str) -> FileTracer | None:  # noqa: ARG002
         return None
 
     def file_reporter(
         self,
         filename: str,
-    ) -> Union[ShellFileReporter, str]:
+    ) -> ShellFileReporter | str:
         return ShellFileReporter(filename)
 
     def find_executable_files(
