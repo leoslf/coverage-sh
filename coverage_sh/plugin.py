@@ -3,13 +3,14 @@ from __future__ import annotations
 import atexit
 import inspect
 import os
-import tempfile
+from socket import gethostname
 from collections import defaultdict
 from pathlib import Path
+from random import randint
 from shutil import which
-from stat import S_IXUSR, S_IRUSR, S_IWUSR
 
 import coverage
+from coverage.sqldata import filename_suffix
 
 SH_ALIASES = {"sh", "/bin/sh", "/usr/bin/sh", which("sh")}
 
@@ -92,6 +93,7 @@ class PatchedPopen(OriginalPopen):
         self._tracefile_path = Path.cwd().joinpath(".coverage-sh", f"{os.getpid()}.trace")
         self._tracefile_path.parent.mkdir(parents=True, exist_ok=True)
         self._tracefile_fd = None
+        self._data = None
 
         # convert args into kwargs
         sig = inspect.signature(subprocess.Popen)
@@ -110,13 +112,17 @@ class PatchedPopen(OriginalPopen):
         ):
             patch_executable = which("bash")
 
-        if patch_executable is not None:
+        cov = coverage.Coverage.current()
+        if cov is not None and  patch_executable is not None:
             self._init_trace(kwargs)
             return
 
         super().__init__( **kwargs)
 
     def _init_trace(self, kwargs):
+
+        self._init_data()
+
         self._tracefile_path.touch()
         self._tracefile_fd = os.open(self._tracefile_path, flags=os.O_RDWR | os.O_CREAT)
 
@@ -137,6 +143,23 @@ class PatchedPopen(OriginalPopen):
 
         super().__init__(**kwargs)
 
+    @staticmethod
+    def _filename_suffix():
+        return "sh." + filename_suffix(suffix=True)
+
+
+    def _init_data(self) -> None:
+        if self._data is None:
+            config = coverage.Coverage.current().config
+            Path(config.data_file).parent.mkdir(parents=True, exist_ok=True)
+            self._data = coverage.CoverageData(
+                basename=config.data_file,
+                suffix=self._filename_suffix(),
+                # TODO set these via the plugin config
+                warn=coverage.Coverage.current()._warn,
+                debug=coverage.Coverage.current()._debug,
+                no_disk=coverage.Coverage.current()._no_disk,
+            )
 
     def _parse_tracefile(self):
         if not self._tracefile_path.exists():
@@ -153,19 +176,22 @@ class PatchedPopen(OriginalPopen):
 
 
     def _write_trace(self, line_data):
-       cov = coverage.Coverage.current()
-       if cov is None:
-           raise ValueError("no Coverage object")
-       cov_data = cov.get_data()
-       cov_data.add_lines(line_data)
-       cov_data.write()
+        self._data.add_file_tracers({f: "coverage_sh.ShellPlugin" for f in line_data.keys()})
+        self._data.add_lines(line_data)
+        self._data.write()
 
     def _finish_trace(self):
         line_data = self._parse_tracefile()
         self._write_trace(line_data)
+
         if self._tracefile_fd is not None:
             os.close(self._tracefile_fd)
+
         self._tracefile_path.unlink(missing_ok=True)
+        parent_dir = self._tracefile_path.parent
+        if len(list(parent_dir.rglob("*"))) == 0:
+            parent_dir.rmdir()
+
 
 class ShellPlugin(CoveragePlugin):
     def __init__(self, options: dict[str, str]):
