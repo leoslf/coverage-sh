@@ -1,24 +1,12 @@
 import json
-import shutil
 import subprocess
 import sys
 
-import pytest
 
+def test_run_and_report(dummy_project_dir, monkeypatch):
 
-@pytest.fixture
-def dummy_project_dir(resources_dir, tmp_path):
-    source = resources_dir / "testproject"
-    dest = tmp_path / "testproject"
-    shutil.copytree(source, dest)
+    monkeypatch.chdir(dummy_project_dir)
 
-    # source.joinpath(".coverage").unlink(missing_ok=True)
-    # source.joinpath("coverage.json").unlink(missing_ok=True)
-
-    return dest
-
-
-def test_run_and_report(dummy_project_dir):
     coverage_file_path = dummy_project_dir.joinpath(".coverage")
     assert not coverage_file_path.is_file()
 
