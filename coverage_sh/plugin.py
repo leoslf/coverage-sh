@@ -19,8 +19,16 @@ if TYPE_CHECKING:
     from coverage.types import TLineNo
     from tree_sitter import Node
 
-SH_ALIASES = {"sh", "/bin/sh", "/usr/bin/sh", which("sh")}
-BASH_ALIASES = {"bash", "/bin/bash", "/usr/bin/bash", which("bash")}
+SUPPORTED_SHELLS = {
+    "sh",
+    "/bin/sh",
+    "/usr/bin/sh",
+    which("sh"),
+    "bash",
+    "/bin/bash",
+    "/usr/bin/bash",
+    which("bash"),
+}
 EXECUTABLE_NODE_TYPES = {
     "subshell",
     "redirected_statement",
@@ -92,18 +100,12 @@ class PatchedPopen(OriginalPopen):
         executable = kwargs.get("executable")
         args: list[str] = kwargs.get("args")
 
-        patch_executable = None
-        if (args[0] in SH_ALIASES) or executable in SH_ALIASES:
-            patch_executable = which("sh")
-        elif (args[0] in BASH_ALIASES) or executable in BASH_ALIASES:
-            patch_executable = which("bash")
-
-        cov = coverage.Coverage.current()
-        if cov is not None and patch_executable is not None:
+        if coverage.Coverage.current() is not None and (
+            args[0] in SUPPORTED_SHELLS or executable in SUPPORTED_SHELLS
+        ):
             self._init_trace(kwargs)
-            return
-
-        super().__init__(**kwargs)
+        else:
+            super().__init__(**kwargs)
 
     def _init_trace(self, kwargs: dict[str, Any]) -> None:
         self._init_data()
