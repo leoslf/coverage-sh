@@ -7,6 +7,7 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 from shutil import which
+from socket import gethostname
 from typing import TYPE_CHECKING, Any, Iterable
 
 import coverage
@@ -85,13 +86,11 @@ OriginalPopen = subprocess.Popen
 
 
 class PatchedPopen(OriginalPopen):
+    tracefiles_dir_path: None | Path = None
+
     def __init__(self, *args, **kwargs):
-        self._tracefile_path = Path.cwd().joinpath(
-            ".coverage-sh", f"{os.getpid()}.trace"
-        )
-        self._tracefile_path.parent.mkdir(parents=True, exist_ok=True)
+        self._tracefile_path = None
         self._tracefile_fd = None
-        self._data = None
 
         # convert args into kwargs
         sig = inspect.signature(subprocess.Popen)
@@ -108,8 +107,10 @@ class PatchedPopen(OriginalPopen):
             super().__init__(**kwargs)
 
     def _init_trace(self, kwargs: dict[str, Any]) -> None:
-        self._init_data()
-
+        self._tracefile_path = (
+            self.tracefiles_dir_path / f"shelltrace.{filename_suffix(suffix=True)}"
+        )
+        self._tracefile_path.parent.mkdir(parents=True, exist_ok=True)
         self._tracefile_path.touch()
         self._tracefile_fd = os.open(self._tracefile_path, flags=os.O_RDWR | os.O_CREAT)
 
@@ -126,33 +127,56 @@ class PatchedPopen(OriginalPopen):
         pass_fds.append(self._tracefile_fd)
         kwargs["pass_fds"] = pass_fds
 
-        atexit.register(self._finish_trace)
-
         super().__init__(**kwargs)
 
-    @staticmethod
-    def _filename_suffix() -> str:
-        return "sh." + filename_suffix(suffix=True)
+    def __del__(self):
+        if self._tracefile_fd is not None:
+            os.close(self._tracefile_fd)
+        super().__del__()
+
+
+class ShellPlugin(CoveragePlugin):
+    def __init__(self, options: dict[str, str]):
+        self.options = options
+        self._data = None
+        self.tracefiles_dir_path = Path.cwd() / ".coverage-sh"
+        self.tracefiles_dir_path.mkdir(parents=True, exist_ok=True)
+
+        atexit.register(self._convert_traces)
+        # TODO: Does this work with multithreading? Isnt there an easier way of finding the base path?
+        PatchedPopen.tracefiles_dir_path = self.tracefiles_dir_path
+        subprocess.Popen = PatchedPopen
 
     def _init_data(self) -> None:
         if self._data is None:
-            config = coverage.Coverage.current().config
-            Path(config.data_file).parent.mkdir(parents=True, exist_ok=True)
             self._data = coverage.CoverageData(
-                basename=config.data_file,
-                suffix=self._filename_suffix(),
-                # TODO set these via the plugin config
-                warn=coverage.Coverage.current()._warn,  # noqa: SLF001
-                debug=coverage.Coverage.current()._debug,  # noqa: SLF001
-                no_disk=coverage.Coverage.current()._no_disk,  # noqa: SLF001
+                # TODO: make basename configurable
+                basename=self.tracefiles_dir_path.parent / ".coverage",
+                suffix="sh." + filename_suffix(suffix=True),
+                # TODO: set warn, debug and no_disk
             )
 
-    def _parse_tracefile(self) -> dict[str, set[int]]:
-        if not self._tracefile_path.exists():
+    def _convert_traces(self) -> None:
+        self._init_data()
+
+        for tracefile_path in self.tracefiles_dir_path.glob(
+            f"shelltrace.{gethostname()}.{os.getpid()}.*"
+        ):
+            line_data = self._parse_tracefile(tracefile_path)
+            self._write_trace(line_data)
+
+            tracefile_path.unlink(missing_ok=True)
+
+        if len(list(self.tracefiles_dir_path.glob("*"))) == 0:
+            self.tracefiles_dir_path.rmdir()
+
+    @staticmethod
+    def _parse_tracefile(tracefile_path: Path) -> dict[str, set[int]]:
+        if not tracefile_path.exists():
             return {}
 
         line_data = defaultdict(set)
-        with self._tracefile_path.open("r") as fd:
+        with tracefile_path.open("r") as fd:
             for line in fd:
                 _, path, lineno, _ = line.split(":::")
                 path = Path(path).absolute()
@@ -164,25 +188,6 @@ class PatchedPopen(OriginalPopen):
         self._data.add_file_tracers({f: "coverage_sh.ShellPlugin" for f in line_data})
         self._data.add_lines(line_data)
         self._data.write()
-
-    def _finish_trace(self) -> None:
-        line_data = self._parse_tracefile()
-        self._write_trace(line_data)
-
-        if self._tracefile_fd is not None:
-            os.close(self._tracefile_fd)
-
-        self._tracefile_path.unlink(missing_ok=True)
-        parent_dir = self._tracefile_path.parent
-        if len(list(parent_dir.rglob("*"))) == 0:
-            parent_dir.rmdir()
-
-
-class ShellPlugin(CoveragePlugin):
-    def __init__(self, options: dict[str, str]):
-        self.options = options
-
-        subprocess.Popen = PatchedPopen
 
     @staticmethod
     def _is_relevant(path: Path) -> bool:

@@ -10,15 +10,15 @@ def test_run_and_report(dummy_project_dir, monkeypatch):
     assert not coverage_file_path.is_file()
 
     proc = subprocess.run(
-        [sys.executable, "-m", "coverage", "run", str(dummy_project_dir / "main.py")],
+        [sys.executable, "-m", "coverage", "run", "main.py"],
         cwd=dummy_project_dir,
         capture_output=True,
         text=True,
         check=False,
     )
-    assert proc.returncode == 0
     assert proc.stderr == ""
     assert proc.stdout == "hello from shell\n"
+    assert proc.returncode == 0
 
     assert len(list(dummy_project_dir.glob(".coverage*"))) == 2
 
