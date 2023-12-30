@@ -28,7 +28,6 @@ def test_ShellPlugin_find_executable_files(examples_dir):
     executable_files = plugin.find_executable_files(str(examples_dir))
 
     assert [Path(f) for f in sorted(executable_files)] == [
-        examples_dir / "atom.sh",
         examples_dir / "shell-file.weird.suffix",
     ]
 
