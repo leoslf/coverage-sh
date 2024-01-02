@@ -8,7 +8,7 @@ from typing import Any
 from .plugin import ShellPlugin
 
 
-def coverage_init(reg, options: dict[str, Any]) -> None:
+def coverage_init(reg, options: dict[str, Any]) -> None:  # noqa: ANN001
     shell_plugin = ShellPlugin(options)
     reg.add_file_tracer(shell_plugin)
     reg.add_configurer(shell_plugin)
