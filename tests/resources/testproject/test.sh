@@ -34,8 +34,8 @@ function say_hello() {
 say_hello
 
 # Command substitution
-current_date=$(date --date='@2147483647')
-echo "Current date is: $current_date"
+os=$(uname)
+echo "Current OS is: $os"
 
 # Arithmetic operations
 result=$((5 + 3))

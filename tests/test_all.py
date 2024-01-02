@@ -29,7 +29,7 @@ def test_run_and_report(dummy_project_dir, monkeypatch):
         "Iteration 4\n"
         "Iteration 5\n"
         "Hello from a function!\n"
-        "Current date is: Di 19. Jan 04:14:07 CET 2038\n"
+        "Current OS is: Linux\n"
         "5 + 3 = 8\n"
         "This is a sample file.\n"
         "You selected a banana.\n"
