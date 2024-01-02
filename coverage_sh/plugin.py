@@ -1,5 +1,5 @@
 #  SPDX-License-Identifier: MIT
-#  Copyright (c) 2023 Kilian Lackhove
+#  Copyright (c) 2023-2024 Kilian Lackhove
 
 from __future__ import annotations
 
@@ -50,7 +50,6 @@ EXECUTABLE_NODE_TYPES = {
     "case_statement",
     "pipeline",
     "list",
-    "compound_statement",
 }
 SUPPORTED_MIME_TYPES = ("text/x-shellscript",)
 
