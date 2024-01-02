@@ -1,5 +1,5 @@
 #  SPDX-License-Identifier: MIT
-#  Copyright (c) 2023 Kilian Lackhove
+#  Copyright (c) 2023-2024 Kilian Lackhove
 
 import subprocess
 from pathlib import Path
@@ -64,7 +64,20 @@ def test_patched_popen(
     cov.stop()
 
     assert proc.stderr.read() == ""
-    assert proc.stdout.read() == "hello from shell\n"
+    assert proc.stdout.read() == (
+        "Hello, World!\n"
+        "Variable is set to 'Hello, World!'\n"
+        "Iteration 1\n"
+        "Iteration 2\n"
+        "Iteration 3\n"
+        "Iteration 4\n"
+        "Iteration 5\n"
+        "Hello from a function!\n"
+        "Current date is: Di 19. Jan 04:14:07 CET 2038\n"
+        "5 + 3 = 8\n"
+        "This is a sample file.\n"
+        "You selected a banana.\n"
+    )
 
     assert len(atexit_callables) == 2
     for c in atexit_callables:

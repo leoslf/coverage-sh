@@ -1,5 +1,5 @@
 #  SPDX-License-Identifier: MIT
-#  Copyright (c) 2023 Kilian Lackhove
+#  Copyright (c) 2023-2024 Kilian Lackhove
 
 import json
 import subprocess
@@ -20,7 +20,20 @@ def test_run_and_report(dummy_project_dir, monkeypatch):
         check=False,
     )
     assert proc.stderr == ""
-    assert proc.stdout == "hello from shell\n"
+    assert proc.stdout == (
+        "Hello, World!\n"
+        "Variable is set to 'Hello, World!'\n"
+        "Iteration 1\n"
+        "Iteration 2\n"
+        "Iteration 3\n"
+        "Iteration 4\n"
+        "Iteration 5\n"
+        "Hello from a function!\n"
+        "Current date is: Di 19. Jan 04:14:07 CET 2038\n"
+        "5 + 3 = 8\n"
+        "This is a sample file.\n"
+        "You selected a banana.\n"
+    )
     assert proc.returncode == 0
 
     assert len(list(dummy_project_dir.glob(".coverage*"))) == 2
@@ -35,40 +48,36 @@ def test_run_and_report(dummy_project_dir, monkeypatch):
     assert len(list(dummy_project_dir.glob(".coverage*"))) == 1
 
     proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "html"], cwd=dummy_project_dir, check=False
+    )
+    assert proc.returncode == 0
+
+    proc = subprocess.run(
         [sys.executable, "-m", "coverage", "json"], cwd=dummy_project_dir, check=False
     )
     assert proc.returncode == 0
 
     coverage_json = json.loads(dummy_project_dir.joinpath("coverage.json").read_text())
-    assert coverage_json["files"] == {
-        "main.py": {
-            "excluded_lines": [],
-            "executed_lines": [1, 4, 5, 8, 9],
-            "missing_lines": [],
-            "summary": {
-                "covered_lines": 5,
-                "excluded_lines": 0,
-                "missing_lines": 0,
-                "num_statements": 5,
-                "percent_covered": 100.0,
-                "percent_covered_display": "100",
-            },
-        },
-        "test.sh": {
-            "excluded_lines": [],
-            "executed_lines": [3],
-            "missing_lines": [],
-            "summary": {
-                "covered_lines": 1,
-                "excluded_lines": 0,
-                "missing_lines": 0,
-                "num_statements": 1,
-                "percent_covered": 100.0,
-                "percent_covered_display": "100",
-            },
-        },
-    }
-    proc = subprocess.run(
-        [sys.executable, "-m", "coverage", "html"], cwd=dummy_project_dir, check=False
-    )
-    assert proc.returncode == 0
+    assert coverage_json["files"]["test.sh"]["excluded_lines"] == []
+    assert coverage_json["files"]["test.sh"]["executed_lines"] == [
+        12,
+        15,
+        18,
+        19,
+        25,
+        26,
+        31,
+        34,
+        37,
+        38,
+        41,
+        42,
+        45,
+        46,
+        47,
+        48,
+        51,
+        52,
+        57,
+    ]
+    assert coverage_json["files"]["test.sh"]["missing_lines"] == [21, 54, 60, 63]
