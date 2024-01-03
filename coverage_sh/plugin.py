@@ -9,7 +9,6 @@ import os
 import subprocess
 from collections import defaultdict
 from pathlib import Path
-from shutil import which
 from socket import gethostname
 from typing import TYPE_CHECKING, Any, Iterable
 
@@ -23,16 +22,6 @@ if TYPE_CHECKING:
     from coverage.types import TLineNo
     from tree_sitter import Node
 
-SUPPORTED_SHELLS = {
-    "sh",
-    "/bin/sh",
-    "/usr/bin/sh",
-    which("sh"),
-    "bash",
-    "/bin/bash",
-    "/usr/bin/bash",
-    which("bash"),
-}
 EXECUTABLE_NODE_TYPES = {
     "subshell",
     "redirected_statement",
@@ -51,7 +40,7 @@ EXECUTABLE_NODE_TYPES = {
     "pipeline",
     "list",
 }
-SUPPORTED_MIME_TYPES = ("text/x-shellscript",)
+SUPPORTED_MIME_TYPES = {"text/x-shellscript"}
 
 parser = get_parser("bash")
 
@@ -88,52 +77,39 @@ OriginalPopen = subprocess.Popen
 
 
 class PatchedPopen(OriginalPopen):
-    tracefiles_dir_path: None | Path = None
+    tracefiles_dir_path: Path = Path.cwd()
 
     def __init__(self, *args, **kwargs):
-        self._tracefile_path = None
-        self._tracefile_fd = None
+        self._envfile_path = None
 
         # convert args into kwargs
         sig = inspect.signature(subprocess.Popen)
         kwargs.update(dict(zip(sig.parameters.keys(), args)))
 
-        executable = kwargs.get("executable")
-        args: list[str] = kwargs.get("args")
-
-        if coverage.Coverage.current() is not None and (
-            args[0] in SUPPORTED_SHELLS or executable in SUPPORTED_SHELLS
-        ):
-            self._init_trace(kwargs)
-        else:
-            super().__init__(**kwargs)
-
-    def _init_trace(self, kwargs: dict[str, Any]) -> None:
-        self._tracefile_path = (
-            self.tracefiles_dir_path / f"shelltrace.{filename_suffix(suffix=True)}"
-        )
-        self._tracefile_path.parent.mkdir(parents=True, exist_ok=True)
-        self._tracefile_path.touch()
-        self._tracefile_fd = os.open(self._tracefile_path, flags=os.O_RDWR | os.O_CREAT)
+        self._setup_envfile()
 
         env = kwargs.get("env", os.environ.copy())
-        env["BASH_XTRACEFD"] = str(self._tracefile_fd)
-        env["PS4"] = "COV:::$BASH_SOURCE:::$LINENO:::"
+        env["BASH_ENV"] = str(self._envfile_path)
+        env["ENV"] = str(self._envfile_path)
         kwargs["env"] = env
-
-        args = list(kwargs.get("args", ()))
-        args.insert(1, "-x")
-        kwargs["args"] = args
-
-        pass_fds = list(kwargs.get("pass_fds", ()))
-        pass_fds.append(self._tracefile_fd)
-        kwargs["pass_fds"] = pass_fds
 
         super().__init__(**kwargs)
 
+    def _setup_envfile(self) -> None:
+        self.tracefiles_dir_path.mkdir(parents=True, exist_ok=True)
+        self._envfile_path = self.tracefiles_dir_path / f"env-helper.{filename_suffix(suffix=True)}.sh"
+        tracefile_path = self.tracefiles_dir_path / f"shelltrace.{filename_suffix(suffix=True)}"
+        self._envfile_path.write_text(rf"""\
+#!/bin/sh
+PS4="COV:::\${{BASH_SOURCE}}:::\${{LINENO}}:::"
+exec {{BASH_XTRACEFD}}>>"{tracefile_path!s}"
+set -x
+"""
+                                      )
+
     def __del__(self):
-        if self._tracefile_fd is not None:
-            os.close(self._tracefile_fd)
+        if self._envfile_path is not None and self._envfile_path.is_file():
+            self._envfile_path.unlink()
         super().__del__()
 
 
@@ -161,6 +137,7 @@ class ShellPlugin(CoveragePlugin):
     def _convert_traces(self) -> None:
         self._init_data()
 
+        # TODO: This is fragile, move the name generation into a function
         for tracefile_path in self.tracefiles_dir_path.glob(
             f"shelltrace.{gethostname()}.{os.getpid()}.*"
         ):
@@ -209,6 +186,7 @@ class ShellPlugin(CoveragePlugin):
         src_dir: str,
     ) -> Iterable[str]:
         for f in Path(src_dir).rglob("*"):
+            # TODO: Use coverage's logic for figuring out if a file should be excluded
             if not f.is_file() or any(p.startswith(".") for p in f.parts):
                 continue
 

@@ -58,8 +58,9 @@ def test_run_and_report(dummy_project_dir, monkeypatch):
     assert proc.returncode == 0
 
     coverage_json = json.loads(dummy_project_dir.joinpath("coverage.json").read_text())
-    assert coverage_json["files"]["test.sh"]["excluded_lines"] == []
-    assert coverage_json["files"]["test.sh"]["executed_lines"] == [
+    assert coverage_json["files"]["test.sh"]["executed_lines"] == [8, 9]
+    assert coverage_json["files"]["syntax_example.sh"]["excluded_lines"] == []
+    assert coverage_json["files"]["syntax_example.sh"]["executed_lines"] == [
         12,
         15,
         18,
@@ -80,4 +81,9 @@ def test_run_and_report(dummy_project_dir, monkeypatch):
         52,
         57,
     ]
-    assert coverage_json["files"]["test.sh"]["missing_lines"] == [21, 54, 60, 63]
+    assert coverage_json["files"]["syntax_example.sh"]["missing_lines"] == [
+        21,
+        54,
+        60,
+        63,
+    ]
