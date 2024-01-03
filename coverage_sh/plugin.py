@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import atexit
+import contextlib
 import inspect
 import os
 import subprocess
 from collections import defaultdict
 from pathlib import Path
 from socket import gethostname
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Iterable
 
 import coverage
 import magic
@@ -97,15 +98,20 @@ class PatchedPopen(OriginalPopen):
 
     def _setup_envfile(self) -> None:
         self.tracefiles_dir_path.mkdir(parents=True, exist_ok=True)
-        self._envfile_path = self.tracefiles_dir_path / f"env-helper.{filename_suffix(suffix=True)}.sh"
-        tracefile_path = self.tracefiles_dir_path / f"shelltrace.{filename_suffix(suffix=True)}"
-        self._envfile_path.write_text(rf"""\
+        self._envfile_path = (
+            self.tracefiles_dir_path / f"env-helper.{filename_suffix(suffix=True)}.sh"
+        )
+        tracefile_path = (
+            self.tracefiles_dir_path / f"shelltrace.{filename_suffix(suffix=True)}"
+        )
+        self._envfile_path.write_text(
+            rf"""\
 #!/bin/sh
 PS4="COV:::\${{BASH_SOURCE}}:::\${{LINENO}}:::"
 exec {{BASH_XTRACEFD}}>>"{tracefile_path!s}"
 set -x
 """
-                                      )
+        )
 
     def __del__(self):
         if self._envfile_path is not None and self._envfile_path.is_file():
@@ -144,9 +150,9 @@ class ShellPlugin(CoveragePlugin):
             line_data = self._parse_tracefile(tracefile_path)
             self._write_trace(line_data)
 
-            tracefile_path.unlink(missing_ok=True)
+            tracefile_path.unlink()
 
-        if len(list(self.tracefiles_dir_path.glob("*"))) == 0:
+        with contextlib.suppress(FileNotFoundError, OSError):
             self.tracefiles_dir_path.rmdir()
 
     @staticmethod
@@ -165,7 +171,9 @@ class ShellPlugin(CoveragePlugin):
                     lineno = int(lineno)
                     path = Path(path).absolute()
                 except ValueError as e:
-                    raise ValueError(f"could not parse line {line} in {tracefile_path}") from e
+                    raise ValueError(
+                        f"could not parse line {line} in {tracefile_path}"
+                    ) from e
 
                 line_data[str(path)].add(lineno)
 
