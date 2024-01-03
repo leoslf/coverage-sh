@@ -157,9 +157,17 @@ class ShellPlugin(CoveragePlugin):
         line_data = defaultdict(set)
         with tracefile_path.open("r") as fd:
             for line in fd:
-                _, path, lineno, _ = line.split(":::")
-                path = Path(path).absolute()
-                line_data[str(path)].add(int(lineno))
+                if "COV:::" not in line:
+                    continue
+
+                try:
+                    _, path, lineno, _ = line.split(":::")
+                    lineno = int(lineno)
+                    path = Path(path).absolute()
+                except ValueError as e:
+                    raise ValueError(f"could not parse line {line} in {tracefile_path}") from e
+
+                line_data[str(path)].add(lineno)
 
         return line_data
 
