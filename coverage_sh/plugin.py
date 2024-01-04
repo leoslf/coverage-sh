@@ -122,20 +122,23 @@ set -x
 class ShellPlugin(CoveragePlugin):
     def __init__(self, options: dict[str, str]):
         self.options = options
+        self._cov_config = coverage.Coverage().config
+
         self._data = None
-        self.tracefiles_dir_path = Path.cwd() / ".coverage-sh"
+        self.tracefiles_dir_path = (
+            Path(self._cov_config.data_file).absolute().parent / ".coverage-sh"
+        )
         self.tracefiles_dir_path.mkdir(parents=True, exist_ok=True)
 
         atexit.register(self._convert_traces)
-        # TODO: Does this work with multithreading? Isnt there an easier way of finding the base path?
         PatchedPopen.tracefiles_dir_path = self.tracefiles_dir_path
         subprocess.Popen = PatchedPopen
 
     def _init_data(self) -> None:
         if self._data is None:
             self._data = coverage.CoverageData(
-                # TODO: make basename configurable
-                basename=self.tracefiles_dir_path.parent / ".coverage",
+                # TODO: This probably wont work with pytest-cov
+                basename=self._cov_config.data_file,
                 suffix="sh." + filename_suffix(suffix=True),
                 # TODO: set warn, debug and no_disk
             )
