@@ -7,22 +7,24 @@ import atexit
 import contextlib
 import inspect
 import os
+import string
 import subprocess
 from collections import defaultdict
 from pathlib import Path
+from random import Random
 from socket import gethostname
 from typing import TYPE_CHECKING, Iterable
 
 import coverage
 import magic
 from coverage import CoveragePlugin, FileReporter, FileTracer
-from coverage.sqldata import filename_suffix
 from tree_sitter_languages import get_parser
 
 if TYPE_CHECKING:
     from coverage.types import TLineNo
     from tree_sitter import Node
 
+TRACEFILE_PREFIX = "shelltrace"
 EXECUTABLE_NODE_TYPES = {
     "subshell",
     "redirected_statement",
@@ -77,6 +79,15 @@ class ShellFileReporter(FileReporter):
 OriginalPopen = subprocess.Popen
 
 
+def filename_suffix(*, add_random: bool = True) -> str:
+    die = Random(os.urandom(8))
+    letters = string.ascii_uppercase + string.ascii_lowercase
+    rolls = "".join(die.choice(letters) for _ in range(6))
+    if add_random:
+        return f"{gethostname()}.{os.getpid()}.X{rolls}x"
+    return f"{gethostname()}.{os.getpid()}"
+
+
 class PatchedPopen(OriginalPopen):
     tracefiles_dir_path: Path = Path.cwd()
 
@@ -99,10 +110,10 @@ class PatchedPopen(OriginalPopen):
     def _setup_envfile(self) -> None:
         self.tracefiles_dir_path.mkdir(parents=True, exist_ok=True)
         self._envfile_path = (
-            self.tracefiles_dir_path / f"env-helper.{filename_suffix(suffix=True)}.sh"
+            self.tracefiles_dir_path / f"env-helper.{filename_suffix()}.sh"
         )
         tracefile_path = (
-            self.tracefiles_dir_path / f"shelltrace.{filename_suffix(suffix=True)}"
+            self.tracefiles_dir_path / f"{TRACEFILE_PREFIX}.{filename_suffix()}"
         )
         self._envfile_path.write_text(
             rf"""\
@@ -139,16 +150,15 @@ class ShellPlugin(CoveragePlugin):
             self._data = coverage.CoverageData(
                 # TODO: This probably wont work with pytest-cov
                 basename=self._cov_config.data_file,
-                suffix="sh." + filename_suffix(suffix=True),
+                suffix="sh." + filename_suffix(),
                 # TODO: set warn, debug and no_disk
             )
 
     def _convert_traces(self) -> None:
         self._init_data()
 
-        # TODO: This is fragile, move the name generation into a function
         for tracefile_path in self.tracefiles_dir_path.glob(
-            f"shelltrace.{gethostname()}.{os.getpid()}.*"
+            f"{TRACEFILE_PREFIX}.{filename_suffix(add_random=False)}.*"
         ):
             line_data = self._parse_tracefile(tracefile_path)
             self._write_trace(line_data)
