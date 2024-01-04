@@ -39,12 +39,11 @@ The resulting coverage is then displayed alongside the coverage of the python fi
 
 ## Caveats
 
-The plugin works by patching the `subprocess.Popen` class to alter `sh` and `bash` calls to produce trace files. This
-approach comes with a few caveats:
+The plugin works by patching the `subprocess.Popen` class to set the "ENV" and "BASH_ENV" environment variables before
+execution to source a helper script which enables tracing. This approach comes with a few caveats:
 
 - It will only cover shell scripts that are executed via the subprocess module.
-- Only commands that start with    `sh`, `/bin/sh`, `/usr/bin/sh` and the path returned by `which sh` as well as their
-  bash equivalents are supported. Custom interpreter paths and other shells are not supported.
+- Only bash and sh are supported
 - Depending on the shell scripts, their trace files may become very large.
 
 ## License
