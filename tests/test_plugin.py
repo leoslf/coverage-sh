@@ -8,7 +8,6 @@ from pathlib import Path
 import coverage
 import pytest
 
-import coverage_sh
 from coverage_sh import ShellPlugin
 from coverage_sh.plugin import PatchedPopen
 
@@ -58,13 +57,6 @@ def test_PatchedPopen(
 ):
     monkeypatch.chdir(dummy_project_dir)
 
-    atexit_callables = []
-
-    def atexit_register(callable_):
-        atexit_callables.append(callable_)
-
-    monkeypatch.setattr(coverage_sh.plugin.atexit, "register", atexit_register)
-
     cov = coverage.Coverage()
     cov.start()
 
@@ -80,24 +72,7 @@ def test_PatchedPopen(
     cov.stop()
 
     assert proc.stderr.read() == ""
-    assert proc.stdout.read() == (
-        "Hello, World!\n"
-        "Variable is set to 'Hello, World!'\n"
-        "Iteration 1\n"
-        "Iteration 2\n"
-        "Iteration 3\n"
-        "Iteration 4\n"
-        "Iteration 5\n"
-        "Hello from a function!\n"
-        "Current OS is: Linux\n"
-        "5 + 3 = 8\n"
-        "This is a sample file.\n"
-        "You selected a banana.\n"
-    )
-
-    assert len(atexit_callables) == 2
-    for c in atexit_callables:
-        c()
+    assert proc.stdout.read() == SYNTAX_EXAMPLE_STDOUT
 
 
 def test_end2end(dummy_project_dir, monkeypatch):
@@ -106,24 +81,20 @@ def test_end2end(dummy_project_dir, monkeypatch):
     coverage_file_path = dummy_project_dir.joinpath(".coverage")
     assert not coverage_file_path.is_file()
 
-    proc = subprocess.run(
-        [sys.executable, "-m", "coverage", "run", "main.py"],
-        cwd=dummy_project_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "coverage", "run", "main.py"],
+            cwd=dummy_project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        assert e.stdout == ""  # noqa: PT017
+        assert e.stderr == ""  # noqa: PT017
+        assert False
     assert proc.stderr == ""
     assert proc.stdout == SYNTAX_EXAMPLE_STDOUT
-    assert proc.returncode == 0
-
-    assert len(list(dummy_project_dir.glob(".coverage*"))) == 2
-
-    proc = subprocess.run(
-        [sys.executable, "-m", "coverage", "combine"],
-        cwd=dummy_project_dir,
-        check=False,
-    )
     assert proc.returncode == 0
 
     assert len(list(dummy_project_dir.glob(".coverage*"))) == 1

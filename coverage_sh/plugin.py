@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import atexit
 import contextlib
 import inspect
 import os
@@ -13,7 +12,8 @@ from collections import defaultdict
 from pathlib import Path
 from random import Random
 from socket import gethostname
-from typing import TYPE_CHECKING, Iterable
+from threading import Thread
+from typing import TYPE_CHECKING, Iterable, Iterator
 
 import coverage
 import magic
@@ -76,9 +76,6 @@ class ShellFileReporter(FileReporter):
         return self._executable_lines
 
 
-OriginalPopen = subprocess.Popen
-
-
 def filename_suffix(*, add_random: bool = True) -> str:
     die = Random(os.urandom(8))
     letters = string.ascii_uppercase + string.ascii_lowercase
@@ -88,114 +85,130 @@ def filename_suffix(*, add_random: bool = True) -> str:
     return f"{gethostname()}.{os.getpid()}"
 
 
+class CoverageParser(Thread):
+    def __init__(self, fifo_path: Path) -> None:
+        super().__init__()
+        self._keep_running = True
+        self.last_line_fragment = ""
+
+        self._fifo_path = fifo_path
+        os.mkfifo(self._fifo_path)
+
+    def stop(self) -> None:
+        self._keep_running = False
+
+    def buf_to_lines(self, buf: bytes) -> Iterator[str]:
+        raw = self.last_line_fragment + buf.decode()
+        self.last_line_fragment = ""
+
+        for line in raw.splitlines(keepends=True):
+            if line.endswith("\n"):
+                yield line[:-1]
+            else:
+                self.last_line_fragment = line
+
+    def run(self) -> None:
+        while self._keep_running:
+            fifo = os.open(self._fifo_path, flags=os.O_RDONLY | os.O_NONBLOCK)
+            while True:
+                try:
+                    buf = os.read(fifo, 2**10)
+                except BlockingIOError:
+                    if not self._keep_running:
+                        break
+                    continue
+                if not buf:
+                    if not self._keep_running:
+                        break
+                    continue
+
+                lines = list(self.buf_to_lines(buf))
+                if lines:
+                    self.report_lines(lines)
+
+            lines = [l for l in self.buf_to_lines(b"\n") if l != ""]  # noqa: E741
+            if lines:
+                self.report_lines(lines)
+
+        with contextlib.suppress(FileNotFoundError):
+            self._fifo_path.unlink()
+
+    def report_lines(self, lines: list[str]) -> None:
+        cov = coverage.Coverage.current()
+        if cov is None:
+            raise RuntimeError(f"no coverage object, discarding lines {lines}")
+
+        line_data = defaultdict(set)
+
+        for line in lines:
+            if "COV:::" not in line:
+                continue
+
+            try:
+                _, path_, lineno_, _ = line.split(":::")
+                lineno = int(lineno_)
+                path = Path(path_).absolute()
+            except ValueError as e:
+                raise ValueError(f"could not parse line {line}") from e
+
+            line_data[str(path)].add(lineno)
+
+        cov.get_data().add_lines(line_data)
+
+
+OriginalPopen = subprocess.Popen
+
+
 class PatchedPopen(OriginalPopen):
     tracefiles_dir_path: Path = Path.cwd()
 
     def __init__(self, *args, **kwargs):
-        self._envfile_path = None
-
         # convert args into kwargs
         sig = inspect.signature(subprocess.Popen)
         kwargs.update(dict(zip(sig.parameters.keys(), args)))
 
-        self._setup_envfile()
-
-        env = kwargs.get("env", os.environ.copy())
-        env["BASH_ENV"] = str(self._envfile_path)
-        env["ENV"] = str(self._envfile_path)
-        kwargs["env"] = env
-
-        super().__init__(**kwargs)
-
-    def _setup_envfile(self) -> None:
-        self.tracefiles_dir_path.mkdir(parents=True, exist_ok=True)
-        self._envfile_path = (
-            self.tracefiles_dir_path / f"env-helper.{filename_suffix()}.sh"
+        self._fifo_path = (
+            Path(os.environ["XDG_RUNTIME_DIR"])
+            / f"coverage-sh.{filename_suffix()}.pipe"
         )
-        tracefile_path = (
-            self.tracefiles_dir_path / f"{TRACEFILE_PREFIX}.{filename_suffix()}"
+        with contextlib.suppress(FileNotFoundError):
+            self._fifo_path.unlink()
+
+        self._parser_thread = CoverageParser(self._fifo_path)
+        self._parser_thread.start()
+
+        self._helper_path = (
+            Path(os.environ["XDG_RUNTIME_DIR"]) / f"coverage-sh.{filename_suffix()}.sh"
         )
-        self._envfile_path.write_text(
-            rf"""\
-#!/bin/sh
+        self._helper_path.write_text(
+            rf"""#!/bin/sh
 PS4="COV:::\${{BASH_SOURCE}}:::\${{LINENO}}:::"
-exec {{BASH_XTRACEFD}}>>"{tracefile_path!s}"
+exec {{BASH_XTRACEFD}}>>"{self._fifo_path!s}"
 set -x
 """
         )
 
-    def __del__(self):
-        if self._envfile_path is not None and self._envfile_path.is_file():
-            self._envfile_path.unlink()
-        super().__del__()
+        env = kwargs.get("env", os.environ.copy())
+        env["BASH_ENV"] = str(self._helper_path)
+        env["ENV"] = str(self._helper_path)
+        kwargs["env"] = env
+
+        super().__init__(**kwargs)
+
+    def wait(self, timeout: float | None = None) -> int:
+        retval = super().wait(timeout)
+        self._parser_thread.stop()
+        self._parser_thread.join()
+        with contextlib.suppress(FileNotFoundError):
+            self._helper_path.unlink()
+        return retval
 
 
 class ShellPlugin(CoveragePlugin):
     def __init__(self, options: dict[str, str]):
         self.options = options
-        self._cov_config = coverage.Coverage().config
 
-        self._data = None
-        self.tracefiles_dir_path = (
-            Path(self._cov_config.data_file).absolute().parent / ".coverage-sh"
-        )
-        self.tracefiles_dir_path.mkdir(parents=True, exist_ok=True)
-
-        atexit.register(self._convert_traces)
-        PatchedPopen.tracefiles_dir_path = self.tracefiles_dir_path
         subprocess.Popen = PatchedPopen
-
-    def _init_data(self) -> None:
-        if self._data is None:
-            self._data = coverage.CoverageData(
-                # TODO: This probably wont work with pytest-cov
-                basename=self._cov_config.data_file,
-                suffix="sh." + filename_suffix(),
-                # TODO: set warn, debug and no_disk
-            )
-
-    def _convert_traces(self) -> None:
-        self._init_data()
-
-        for tracefile_path in self.tracefiles_dir_path.glob(
-            f"{TRACEFILE_PREFIX}.{filename_suffix(add_random=False)}.*"
-        ):
-            line_data = self._parse_tracefile(tracefile_path)
-            self._write_trace(line_data)
-
-            tracefile_path.unlink()
-
-        with contextlib.suppress(FileNotFoundError, OSError):
-            self.tracefiles_dir_path.rmdir()
-
-    @staticmethod
-    def _parse_tracefile(tracefile_path: Path) -> dict[str, set[int]]:
-        if not tracefile_path.exists():
-            return {}
-
-        line_data = defaultdict(set)
-        with tracefile_path.open("r") as fd:
-            for line in fd:
-                if "COV:::" not in line:
-                    continue
-
-                try:
-                    _, path, lineno, _ = line.split(":::")
-                    lineno = int(lineno)
-                    path = Path(path).absolute()
-                except ValueError as e:
-                    raise ValueError(
-                        f"could not parse line {line} in {tracefile_path}"
-                    ) from e
-
-                line_data[str(path)].add(lineno)
-
-        return line_data
-
-    def _write_trace(self, line_data: dict[str, set[int]]) -> None:
-        self._data.add_file_tracers({f: "coverage_sh.ShellPlugin" for f in line_data})
-        self._data.add_lines(line_data)
-        self._data.write()
 
     @staticmethod
     def _is_relevant(path: Path) -> bool:
