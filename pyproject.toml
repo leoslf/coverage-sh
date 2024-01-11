@@ -25,6 +25,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.urls]
+homepage = "https://github.com/lackhove/coverage-sh"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
