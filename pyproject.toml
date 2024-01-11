@@ -1,6 +1,6 @@
 [project]
 name = "coverage-sh"
-version = "0.2.0"
+version = "0.3.0"
 description = "A  Coverage.py plugin to measure code coverage of shell scripts from python."
 authors = [
     { name = "Kilian Lackhove", email = "kilian@lackhove.de" }
