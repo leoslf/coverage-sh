@@ -44,7 +44,6 @@ execution to source a helper script which enables tracing. This approach comes w
 
 - It will only cover shell scripts that are executed via the subprocess module.
 - Only bash and sh are supported
-- Depending on the shell scripts, their trace files may become very large.
 
 ## License
 
