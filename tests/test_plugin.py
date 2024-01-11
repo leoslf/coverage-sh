@@ -75,11 +75,17 @@ def test_PatchedPopen(
     assert proc.stdout.read() == SYNTAX_EXAMPLE_STDOUT
 
 
-def test_end2end(dummy_project_dir, monkeypatch):
+@pytest.mark.parametrize("cover_always", [(True,), (False)])
+def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
     monkeypatch.chdir(dummy_project_dir)
 
     coverage_file_path = dummy_project_dir.joinpath(".coverage")
     assert not coverage_file_path.is_file()
+
+    if cover_always:
+        pyproject_file = dummy_project_dir.joinpath("pyproject.toml")
+        with pyproject_file.open("a") as fd:
+            fd.write("\n[tool.coverage.coverage_sh]\ncover_always = true")
 
     try:
         proc = subprocess.run(
@@ -88,16 +94,29 @@ def test_end2end(dummy_project_dir, monkeypatch):
             capture_output=True,
             text=True,
             check=False,
+            timeout=2,
         )
     except subprocess.TimeoutExpired as e:
-        assert e.stdout == ""  # noqa: PT017
-        assert e.stderr == ""  # noqa: PT017
+        assert e.stdout == "failed stdout"  # noqa: PT017
+        assert e.stderr == "failed stderr"  # noqa: PT017
         assert False
     assert proc.stderr == ""
     assert proc.stdout == SYNTAX_EXAMPLE_STDOUT
     assert proc.returncode == 0
 
-    assert len(list(dummy_project_dir.glob(".coverage*"))) == 1
+    num_coverage_files = len(list(dummy_project_dir.glob(".coverage*")))
+    # TODO: Currently cover_always produces one or two .coverage files due to a race condition between coverage.stop()
+    # being called and the shell script finishing. This is why with cover_always we can have either 1 or 2 .coverage files
+    if cover_always and num_coverage_files == 2:
+        proc = subprocess.run(
+            [sys.executable, "-m", "coverage", "combine"],
+            cwd=dummy_project_dir,
+            check=False,
+        )
+        print("recombined")
+        assert proc.returncode == 0
+    elif num_coverage_files != 1:
+        assert False
 
     proc = subprocess.run(
         [sys.executable, "-m", "coverage", "html"], cwd=dummy_project_dir, check=False

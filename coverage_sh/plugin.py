@@ -8,11 +8,11 @@ import inspect
 import os
 import string
 import subprocess
+import threading
 from collections import defaultdict
 from pathlib import Path
 from random import Random
 from socket import gethostname
-from threading import Thread
 from typing import TYPE_CHECKING, Iterable, Iterator
 
 import coverage
@@ -85,14 +85,22 @@ def filename_suffix(*, add_random: bool = True) -> str:
     return f"{gethostname()}.{os.getpid()}"
 
 
-class CoverageParser(Thread):
-    def __init__(self, fifo_path: Path) -> None:
-        super().__init__()
+class CoverageParserThread(threading.Thread):
+    def __init__(self, *args, coverage_data_path: Path | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self._keep_running = True
         self.last_line_fragment = ""
 
-        self._fifo_path = fifo_path
-        os.mkfifo(self._fifo_path)
+        self.coverage_data_path = coverage_data_path
+        self._data: coverage.CoverageData | None = None
+
+        self.fifo_path = (
+            Path(os.environ["XDG_RUNTIME_DIR"])
+            / f"coverage-sh.{filename_suffix()}.pipe"
+        )
+        with contextlib.suppress(FileNotFoundError):
+            self.fifo_path.unlink()
+        os.mkfifo(self.fifo_path)
 
     def stop(self) -> None:
         self._keep_running = False
@@ -109,7 +117,7 @@ class CoverageParser(Thread):
 
     def run(self) -> None:
         while self._keep_running:
-            fifo = os.open(self._fifo_path, flags=os.O_RDONLY | os.O_NONBLOCK)
+            fifo = os.open(self.fifo_path, flags=os.O_RDONLY | os.O_NONBLOCK)
             while True:
                 try:
                     buf = os.read(fifo, 2**10)
@@ -131,11 +139,11 @@ class CoverageParser(Thread):
                 self.report_lines(lines)
 
         with contextlib.suppress(FileNotFoundError):
-            self._fifo_path.unlink()
+            self.fifo_path.unlink()
 
     def report_lines(self, lines: list[str]) -> None:
         cov = coverage.Coverage.current()
-        if cov is None:
+        if cov is None and self.coverage_data_path is None:
             raise RuntimeError(f"no coverage object, discarding lines {lines}")
 
         line_data = defaultdict(set)
@@ -153,10 +161,40 @@ class CoverageParser(Thread):
 
             line_data[str(path)].add(lineno)
 
-        cov.get_data().add_lines(line_data)
+        if cov is not None:
+            cov.get_data().add_lines(line_data)
+            return
+        self._write_trace(line_data)
+
+    def _write_trace(self, line_data: dict[str, set[int]]) -> None:
+        if self._data is None:
+            self._data = coverage.CoverageData(
+                # TODO: This probably wont work with pytest-cov
+                basename=self.coverage_data_path,
+                suffix="sh." + filename_suffix(),
+                # TODO: set warn, debug and no_disk
+            )
+
+        self._data.add_file_tracers({f: "coverage_sh.ShellPlugin" for f in line_data})
+        self._data.add_lines(line_data)
+        self._data.write()
 
 
 OriginalPopen = subprocess.Popen
+
+
+def init_helper(fifo_path: Path) -> Path:
+    helper_path = (
+        Path(os.environ["XDG_RUNTIME_DIR"]) / f"coverage-sh.{filename_suffix()}.sh"
+    )
+    helper_path.write_text(
+        rf"""#!/bin/sh
+PS4="COV:::\${{BASH_SOURCE}}:::\${{LINENO}}:::"
+exec {{BASH_XTRACEFD}}>>"{fifo_path!s}"
+set -x
+"""
+    )
+    return helper_path
 
 
 class PatchedPopen(OriginalPopen):
@@ -167,26 +205,10 @@ class PatchedPopen(OriginalPopen):
         sig = inspect.signature(subprocess.Popen)
         kwargs.update(dict(zip(sig.parameters.keys(), args)))
 
-        self._fifo_path = (
-            Path(os.environ["XDG_RUNTIME_DIR"])
-            / f"coverage-sh.{filename_suffix()}.pipe"
-        )
-        with contextlib.suppress(FileNotFoundError):
-            self._fifo_path.unlink()
-
-        self._parser_thread = CoverageParser(self._fifo_path)
-        self._parser_thread.start()
-
-        self._helper_path = (
-            Path(os.environ["XDG_RUNTIME_DIR"]) / f"coverage-sh.{filename_suffix()}.sh"
-        )
-        self._helper_path.write_text(
-            rf"""#!/bin/sh
-PS4="COV:::\${{BASH_SOURCE}}:::\${{LINENO}}:::"
-exec {{BASH_XTRACEFD}}>>"{self._fifo_path!s}"
-set -x
-"""
-        )
+        parser_thread = CoverageParserThread(name="CoverageParserThread(None)")
+        parser_thread.start()
+        self._parser_thread = parser_thread
+        self._helper_path = init_helper(self._parser_thread.fifo_path)
 
         env = kwargs.get("env", os.environ.copy())
         env["BASH_ENV"] = str(self._helper_path)
@@ -204,11 +226,46 @@ set -x
         return retval
 
 
+class MonitorThread(threading.Thread):
+    def __init__(self, *args, parser_thread: CoverageParserThread, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.parser_thread = parser_thread
+
+    def run(self) -> None:
+        main_thread = threading.main_thread()
+        main_thread.join()
+        self.parser_thread.stop()
+        self.parser_thread.join()
+
+
 class ShellPlugin(CoveragePlugin):
     def __init__(self, options: dict[str, str]):
         self.options = options
+        self._helper_path = None
 
-        subprocess.Popen = PatchedPopen
+        if self.options.get("cover_always", False):
+            coverage_data_path = Path(coverage.Coverage().config.data_file).absolute()
+            parser_thread = CoverageParserThread(
+                coverage_data_path=coverage_data_path,
+                name=f"CoverageParserThread({coverage_data_path!s})",
+            )
+            parser_thread.start()
+
+            monitor_thread = MonitorThread(
+                parser_thread=parser_thread, name="MonitorThread"
+            )
+            monitor_thread.start()
+
+            self._helper_path = init_helper(parser_thread.fifo_path)
+            os.environ["BASH_ENV"] = str(self._helper_path)
+            os.environ["ENV"] = str(self._helper_path)
+        else:
+            subprocess.Popen = PatchedPopen
+
+    def __del__(self):
+        if self._helper_path is not None:
+            with contextlib.suppress(FileNotFoundError):
+                self._helper_path.unlink()
 
     @staticmethod
     def _is_relevant(path: Path) -> bool:
