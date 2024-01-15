@@ -11,23 +11,32 @@ permissions:
 
 jobs:
   lint_test:
-
+    name: "Run linters and pytest with python ${{ matrix.python-version }}"
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+      fail-fast: false
 
     steps:
     - uses: actions/checkout@v3
+    
     - name: Set up Python 3.10
       uses: actions/setup-python@v3
       with:
         python-version: "3.10"
+        
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.lock -r requirements-dev.lock
+        
     - name: Lint with ruff
       run: |
         ruff format --check .
         ruff check .
+        
     - name: Test with pytest
       run: |
         pytest
