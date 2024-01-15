@@ -75,7 +75,7 @@ def test_PatchedPopen(
     assert proc.stdout.read() == SYNTAX_EXAMPLE_STDOUT
 
 
-@pytest.mark.parametrize("cover_always", [(True,), (False)])
+@pytest.mark.parametrize("cover_always", [(True), (False)])
 def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
     monkeypatch.chdir(dummy_project_dir)
 
@@ -104,19 +104,14 @@ def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
     assert proc.stdout == SYNTAX_EXAMPLE_STDOUT
     assert proc.returncode == 0
 
-    num_coverage_files = len(list(dummy_project_dir.glob(".coverage*")))
-    # TODO: Currently cover_always produces one or two .coverage files due to a race condition between coverage.stop()
-    # being called and the shell script finishing. This is why with cover_always we can have either 1 or 2 .coverage files
-    if cover_always and num_coverage_files == 2:
-        proc = subprocess.run(
-            [sys.executable, "-m", "coverage", "combine"],
-            cwd=dummy_project_dir,
-            check=False,
-        )
-        print("recombined")
-        assert proc.returncode == 0
-    elif num_coverage_files != 1:
-        assert False
+    assert len(list(dummy_project_dir.glob(".coverage*"))) == 2
+    proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "combine"],
+        cwd=dummy_project_dir,
+        check=False,
+    )
+    print("recombined")
+    assert proc.returncode == 0
 
     proc = subprocess.run(
         [sys.executable, "-m", "coverage", "html"], cwd=dummy_project_dir, check=False
