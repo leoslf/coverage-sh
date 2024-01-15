@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from socket import gethostname
 
 import coverage
 import pytest
@@ -104,7 +105,9 @@ def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
     assert proc.stdout == SYNTAX_EXAMPLE_STDOUT
     assert proc.returncode == 0
 
-    assert len(list(dummy_project_dir.glob(".coverage*"))) == 2
+    assert dummy_project_dir.joinpath(".coverage").is_file()
+    assert len(list(dummy_project_dir.glob(f".coverage.sh.{gethostname()}.*"))) == 1
+
     proc = subprocess.run(
         [sys.executable, "-m", "coverage", "combine"],
         cwd=dummy_project_dir,

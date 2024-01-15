@@ -158,7 +158,7 @@ class CoverageParserThread(threading.Thread):
             self._line_data[str(path)].add(lineno)
 
     def _write_trace(self) -> None:
-        suffix_ = "-sh." + filename_suffix()
+        suffix_ = "sh." + filename_suffix()
         coverage_data = coverage.CoverageData(
             # TODO: This probably wont work with pytest-cov
             basename=self._coverage_data_path,
