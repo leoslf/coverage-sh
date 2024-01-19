@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import inspect
 import os
+import selectors
 import string
 import subprocess
 import threading
@@ -13,6 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 from random import Random
 from socket import gethostname
+from time import sleep
 from typing import TYPE_CHECKING, Iterable, Iterator
 
 import coverage
@@ -92,6 +94,7 @@ class CoverageParserThread(threading.Thread):
         self._last_line_fragment = ""
         self._coverage_data_path = coverage_data_path
         self._line_data = defaultdict(set)
+        self._listening = False
 
         self.fifo_path = (
             Path(os.environ["XDG_RUNTIME_DIR"])
@@ -100,6 +103,11 @@ class CoverageParserThread(threading.Thread):
         with contextlib.suppress(FileNotFoundError):
             self.fifo_path.unlink()
         os.mkfifo(self.fifo_path)
+
+    def start(self) -> None:
+        super().start()
+        while not self._listening:
+            sleep(0.0001)
 
     def stop(self) -> None:
         self._keep_running = False
@@ -115,26 +123,31 @@ class CoverageParserThread(threading.Thread):
                 self._last_line_fragment = line
 
     def run(self) -> None:
+        sel = selectors.DefaultSelector()
         while self._keep_running:
-            # we need to keep reopening the fifo as long as the subprocess is running because multiple bash porocess
+            # we need to keep reopening the fifo as long as the subprocess is running because multiple bash processes
             # might write EOFs to it
             fifo = os.open(self.fifo_path, flags=os.O_RDONLY | os.O_NONBLOCK)
-            while True:
-                try:
-                    buf = os.read(fifo, 2**10)
-                except BlockingIOError:
-                    if not self._keep_running:
-                        break
-                    continue
-                if not buf:
-                    if not self._keep_running:
-                        break
-                    continue
+            sel.register(fifo, selectors.EVENT_READ)
+            self._listening = True
 
-                self._report_lines(list(self._buf_to_lines(buf)))
+            eof = False
+            data_incoming = True
+            while not eof and (data_incoming or self._keep_running):
+                events = sel.select(timeout=1)
+                data_incoming = len(events) > 0
+                for key, _ in events:
+                    buf = os.read(key.fd, 2**10)
+                    if not buf:
+                        eof = True
+                        break
+                    self._report_lines(list(self._buf_to_lines(buf)))
 
             # flush our internal buffer
             self._report_lines([l for l in self._buf_to_lines(b"\n") if l != ""])  # noqa: E741
+
+            sel.unregister(fifo)
+            os.close(fifo)
 
         self._write_trace()
         with contextlib.suppress(FileNotFoundError):
@@ -208,6 +221,7 @@ class PatchedPopen(OriginalPopen):
             coverage_data_path=self.data_file_path, name="CoverageParserThread(None)"
         )
         self._parser_thread.start()
+
         self._helper_path = init_helper(self._parser_thread.fifo_path)
 
         env = kwargs.get("env", os.environ.copy())

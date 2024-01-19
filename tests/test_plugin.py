@@ -1,5 +1,7 @@
 #  SPDX-License-Identifier: MIT
 #  Copyright (c) 2023-2024 Kilian Lackhove
+from __future__ import annotations
+
 import json
 import subprocess
 import sys
@@ -53,16 +55,14 @@ def test_ShellPlugin_find_executable_files(examples_dir):
     ]
 
 
-def test_CoverageParserThread(resources_dir,
-                              dummy_project_dir,
-                              monkeypatch ):
+def test_CoverageParserThread(dummy_project_dir, monkeypatch):
     class WriterThread(threading.Thread):
-
         def __init__(self, fifo_path: Path):
             super().__init__()
             self._fifo_path = fifo_path
 
         def run(self):
+            print("writer start")
             with self._fifo_path.open("w") as fd:
                 fd.write("writer starting\n")
                 sleep(0.1)
@@ -78,9 +78,12 @@ def test_CoverageParserThread(resources_dir,
                 sleep(0.1)
                 fd.write("closing fd for good\n")
 
+            print("writer done")
+
     recorded_lines = []
 
-    def report_lines(self, lines: list[str]) -> None:
+    def report_lines(_, lines: list[str]) -> None:
+        print(lines)
         recorded_lines.extend(lines)
 
     monkeypatch.setattr(CoverageParserThread, "_report_lines", report_lines)
@@ -90,7 +93,6 @@ def test_CoverageParserThread(resources_dir,
     parser_thread = CoverageParserThread(
         coverage_data_path=data_file_path, name="CoverageParserThread"
     )
-
     parser_thread.start()
 
     writer_thread = WriterThread(fifo_path=parser_thread.fifo_path)
@@ -100,18 +102,20 @@ def test_CoverageParserThread(resources_dir,
     parser_thread.stop()
     parser_thread.join()
 
-    assert recorded_lines == ["writer starting",
-                              "next message",
-                              "closing fd",
-                              "reopened fd",
-                              "next message",
-                              "closing fd for good"]
+    assert recorded_lines == [
+        "writer starting",
+        "next message",
+        "closing fd",
+        "reopened fd",
+        "next message",
+        "closing fd for good",
+    ]
 
 
 def test_PatchedPopen(
-        resources_dir,
-        dummy_project_dir,
-        monkeypatch,
+    resources_dir,
+    dummy_project_dir,
+    monkeypatch,
 ):
     monkeypatch.chdir(dummy_project_dir)
 
