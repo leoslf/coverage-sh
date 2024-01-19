@@ -3,14 +3,16 @@
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from socket import gethostname
+from time import sleep
 
 import coverage
 import pytest
 
 from coverage_sh import ShellPlugin
-from coverage_sh.plugin import PatchedPopen
+from coverage_sh.plugin import CoverageParserThread, PatchedPopen
 
 SYNTAX_EXAMPLE_STDOUT = (
     "Hello, World!\n"
@@ -51,10 +53,65 @@ def test_ShellPlugin_find_executable_files(examples_dir):
     ]
 
 
+def test_CoverageParserThread(resources_dir,
+                              dummy_project_dir,
+                              monkeypatch ):
+    class WriterThread(threading.Thread):
+
+        def __init__(self, fifo_path: Path):
+            super().__init__()
+            self._fifo_path = fifo_path
+
+        def run(self):
+            with self._fifo_path.open("w") as fd:
+                fd.write("writer starting\n")
+                sleep(0.1)
+                fd.write("next message\n")
+                sleep(0.1)
+                fd.write("closing fd\n")
+
+            sleep(0.1)
+            with self._fifo_path.open("w") as fd:
+                fd.write("reopened fd\n")
+                sleep(0.1)
+                fd.write("next message\n")
+                sleep(0.1)
+                fd.write("closing fd for good\n")
+
+    recorded_lines = []
+
+    def report_lines(self, lines: list[str]) -> None:
+        recorded_lines.extend(lines)
+
+    monkeypatch.setattr(CoverageParserThread, "_report_lines", report_lines)
+
+    data_file_path = dummy_project_dir.joinpath("coverage-data.db")
+
+    parser_thread = CoverageParserThread(
+        coverage_data_path=data_file_path, name="CoverageParserThread"
+    )
+
+    parser_thread.start()
+
+    writer_thread = WriterThread(fifo_path=parser_thread.fifo_path)
+    writer_thread.start()
+    writer_thread.join()
+
+    parser_thread.stop()
+    parser_thread.join()
+
+    assert recorded_lines == ["writer starting",
+                              "next message",
+                              "closing fd",
+                              "reopened fd",
+                              "next message",
+                              "closing fd for good"]
+
+
 def test_PatchedPopen(
-    resources_dir,
-    dummy_project_dir,
-    monkeypatch,
+        resources_dir,
+        dummy_project_dir,
+        monkeypatch,
 ):
     monkeypatch.chdir(dummy_project_dir)
 
