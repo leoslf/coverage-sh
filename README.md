@@ -47,10 +47,29 @@ The resulting coverage is then displayed alongside the coverage of the python fi
 ## Caveats
 
 The plugin works by patching the `subprocess.Popen` class to set the "ENV" and "BASH_ENV" environment variables before
-execution to source a helper script which enables tracing. This approach comes with a few caveats:
+execution, to source a helper script which enables tracing. This approach comes with a few caveats:
 
 - It will only cover shell scripts that are executed via the subprocess module.
 - Only bash and sh are supported
+
+## Cover-Always Mode
+
+When using the subprocess modue is not an option, coverage-sh can operate in "cover-always-mode", which is activated by
+setting
+
+```toml
+[tool.coverage.coverage_sh]
+cover_always = true
+```
+
+in the `pyproject.toml`. In this mode, Coverage.sh will not respect the `coverage.start()` and `coverage.stop()` calls
+and instead cover every shell script executed after the plugin gets loaded until the main process is finished.
+This mode is also incompatible with the popular [pytest-cov](https://github.com/pytest-dev/pytest-cov) but works with
+starting pytest from coverage , e.g.:
+
+```bash
+coverage run -m pytest arg1 arg2 arg3
+```
 
 ## License
 
