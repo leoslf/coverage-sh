@@ -23,9 +23,7 @@ jobs:
           image: centos:7
           options: -v ${{ github.workspace }}:/work
           run: |
-            yum -y update
-            yum -y install wget
-            wget https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.12.1+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz
+            curl --silent -OJL  https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.12.1+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz
             tar xzf cpython-3.12.1+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz
             cd /work
             /python/bin/python3 -m venv .venv
