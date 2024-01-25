@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import os
 import selectors
+import stat
 import string
 import subprocess
 import threading
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     from coverage.types import TLineNo
     from tree_sitter import Node
 
+TMP_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))  # noqa: S108
 TRACEFILE_PREFIX = "shelltrace"
 EXECUTABLE_NODE_TYPES = {
     "subshell",
@@ -96,13 +98,10 @@ class CoverageParserThread(threading.Thread):
         self._line_data = defaultdict(set)
         self._listening = False
 
-        self.fifo_path = (
-            Path(os.environ["XDG_RUNTIME_DIR"])
-            / f"coverage-sh.{filename_suffix()}.pipe"
-        )
+        self.fifo_path = TMP_PATH / f"coverage-sh.{filename_suffix()}.pipe"
         with contextlib.suppress(FileNotFoundError):
             self.fifo_path.unlink()
-        os.mkfifo(self.fifo_path)
+        os.mkfifo(self.fifo_path, mode=stat.S_IRUSR | stat.S_IWUSR)
 
     def start(self) -> None:
         super().start()
@@ -190,16 +189,16 @@ OriginalPopen = subprocess.Popen
 
 
 def init_helper(fifo_path: Path) -> Path:
-    helper_path = (
-        Path(os.environ["XDG_RUNTIME_DIR"]) / f"coverage-sh.{filename_suffix()}.sh"
-    )
+    helper_path = Path(TMP_PATH, f"coverage-sh.{filename_suffix()}.sh")
     helper_path.write_text(
         rf"""#!/bin/sh
 PS4="COV:::\${{BASH_SOURCE}}:::\${{LINENO}}:::"
 exec {{BASH_XTRACEFD}}>>"{fifo_path!s}"
+export BASH_XTRACEFD
 set -x
 """
     )
+    helper_path.chmod(mode=stat.S_IRUSR | stat.S_IWUSR)
     return helper_path
 
 
