@@ -194,6 +194,7 @@ def init_helper(fifo_path: Path) -> Path:
         rf"""#!/bin/sh
 PS4="COV:::\${{BASH_SOURCE}}:::\${{LINENO}}:::"
 exec {{BASH_XTRACEFD}}>>"{fifo_path!s}"
+export BASH_XTRACEFD
 set -x
 """
     )
