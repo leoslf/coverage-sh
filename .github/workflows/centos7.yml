@@ -23,11 +23,12 @@ jobs:
           image: centos:7
           options: -v ${{ github.workspace }}:/work
           run: |
-            curl --silent -OJL  https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.12.1+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz
-            tar xzf cpython-3.12.1+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz
+            curl -sSf https://rye-up.com/get | RYE_NO_AUTO_INSTALL=1 RYE_INSTALL_OPTION="--yes" bash
+            source "$HOME/.rye/env"
             cd /work
-            /python/bin/python3 -m venv .venv
+            rye sync --no-lock
             source .venv/bin/activate
-            pip install -r requirements.lock -r requirements-dev.lock
+            ruff format --check .
+            rye run ruff check .
             pytest
 
