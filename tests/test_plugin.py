@@ -15,7 +15,13 @@ import coverage
 import pytest
 
 from coverage_sh import ShellPlugin
-from coverage_sh.plugin import CoverageParserThread, PatchedPopen, ShellFileReporter, filename_suffix
+from coverage_sh.plugin import (
+    CoverageParserThread,
+    CovLineParser,
+    PatchedPopen,
+    ShellFileReporter,
+    filename_suffix,
+)
 
 SYNTAX_EXAMPLE_STDOUT = (
     "Hello, World!\n"
@@ -56,30 +62,31 @@ def test_ShellPlugin_find_executable_files(examples_dir):
     ]
 
 
+class TestPatchedPopen:
+    def test_call(
+            self,
+            resources_dir,
+            dummy_project_dir,
+            monkeypatch,
+    ):
+        monkeypatch.chdir(dummy_project_dir)
 
-def test_PatchedPopen(
-        resources_dir,
-        dummy_project_dir,
-        monkeypatch,
-):
-    monkeypatch.chdir(dummy_project_dir)
+        cov = coverage.Coverage()
+        cov.start()
 
-    cov = coverage.Coverage()
-    cov.start()
+        test_sh_path = resources_dir / "testproject" / "test.sh"
+        proc = PatchedPopen(
+            ["/bin/bash", test_sh_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf8",
+        )
+        proc.wait()
 
-    test_sh_path = resources_dir / "testproject" / "test.sh"
-    proc = PatchedPopen(
-        ["/bin/bash", test_sh_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf8",
-    )
-    proc.wait()
+        cov.stop()
 
-    cov.stop()
-
-    assert proc.stderr.read() == ""
-    assert proc.stdout.read() == SYNTAX_EXAMPLE_STDOUT
+        assert proc.stderr.read() == ""
+        assert proc.stdout.read() == SYNTAX_EXAMPLE_STDOUT
 
 
 @pytest.mark.parametrize("cover_always", [(True), (False)])
@@ -167,14 +174,21 @@ def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
 class TestShellFileReporter:
 
     @pytest.fixture()
-    def reporter(self, examples_dir):
-        return ShellFileReporter(str(examples_dir / "shell-file.weird.suffix"))
+    def shell_file(self, tmp_path, examples_dir):
+        sf_path = tmp_path / "foo.sh"
+        sf_path.write_bytes(examples_dir.joinpath("shell-file.weird.suffix").read_bytes())
 
-    def test_source(self, reporter):
+        return sf_path
+
+    @pytest.fixture()
+    def reporter(self, shell_file):
+        return ShellFileReporter(str(shell_file))
+
+    def test_source(self, shell_file, reporter):
         reference = Path(reporter.path).read_text()
 
         assert reporter.source() == reference
-        assert reporter._content == reference
+        shell_file.unlink()
         assert reporter.source() == reference
 
     def test_lines(self, reporter):
@@ -208,64 +222,95 @@ def test_filename_suffix():
     assert re.match(r"\w+\.\d+\.[a-zA-Z]+", suffix)
 
 
+class SpyCovLineParser(CovLineParser):
+    def __init__(self):
+        super().__init__()
+        self.recorded_lines = []
+
+    def _report_lines(self, lines: list[str]) -> None:
+        self.recorded_lines.extend(lines)
+        super()._report_lines(lines)
+
+
+line_chunks = (b"""\
+COV:::/home/dummy_user/dummy_dir_a:::1:::a normal line,
+COV:::/home/dummy_user/dummy_dir_b:::10:::a line
+with a line fragment
+
+COV:::/home/dummy_user/dummy_dir_a:::2:::a  line with ::: triple columns
+COV:::/home/dummy_user/dummy_dir_a:::3:::a  line """,
+               b"that spans multiple chunks\n",
+               b"C",
+               b"O",
+               b"V",
+               b":",
+               b":",
+               b":",
+               b"/",
+               b"ho",
+               b"m",
+               b"e",
+               b"/dummy_user/dummy_dir_a:::4:::a chunked line")
+line_lines = ["COV:::/home/dummy_user/dummy_dir_a:::1:::a normal line,",
+              "COV:::/home/dummy_user/dummy_dir_b:::10:::a line",
+              "with a line fragment",
+              "COV:::/home/dummy_user/dummy_dir_a:::2:::a  line with ::: triple columns",
+              "COV:::/home/dummy_user/dummy_dir_a:::3:::a  line that spans multiple chunks",
+              "COV:::/home/dummy_user/dummy_dir_a:::4:::a chunked line"]
+line_coverage = {"/home/dummy_user/dummy_dir_a": {1, 2, 3, 4}, "/home/dummy_user/dummy_dir_b": {10}}
+
+
+class TestCovLineParser:
+
+    def test_parse(self):
+        parser = SpyCovLineParser()
+        for chunk in line_chunks:
+            parser.parse(chunk)
+        parser.flush()
+
+        assert parser.recorded_lines == line_lines
+
+        assert parser.line_data == line_coverage
+
+        with pytest.raises(ValueError, match="could not parse line"):
+            parser.parse(b"COV:::/home/dummy_user/dummy_dir_b:::a line with missing line number\n")
+
+    def test_parse_raises(self):
+        parser = SpyCovLineParser()
+        with pytest.raises(ValueError, match="could not parse line"):
+            parser.parse(b"COV:::foobar\n")
+
+
+
+class WriterThread(threading.Thread):
+    def __init__(self, fifo_path: Path):
+        super().__init__()
+        self._fifo_path = fifo_path
+
+    def run(self):
+        print("writer start")
+        with self._fifo_path.open("wb") as fd:
+            for c in line_chunks[0:2]:
+                fd.write(c)
+                sleep(0.1)
+
+        sleep(0.1)
+        with self._fifo_path.open("wb") as fd:
+            for c in line_chunks[2:]:
+                fd.write(c)
+                sleep(0.1)
+
+        print("writer done")
+
+
 class TestCoverageParserThread:
 
-    @pytest.fixture()
-    def parser_thread(self, tmp_path):
-        data_path = tmp_path / "coverage.db"
-        return CoverageParserThread(
-            coverage_data_path=data_path, name="CoverageParserThread"
-        )
-
-    def test_buf_to_lines(self, parser_thread):
-        lines = []
-        lines.extend(parser_thread._buf_to_lines(b"a" * 8 + b"\n"))
-        lines.extend(parser_thread._buf_to_lines(b"b" * 4))
-        lines.extend(parser_thread._buf_to_lines(b"b" * 4 + b"\n" + b"c" * 4))
-        lines.extend(parser_thread._buf_to_lines(b"c" * 4 + b"\n"))
-        lines.extend(parser_thread._buf_to_lines(b"d" * 8))
-        lines.extend(parser_thread._buf_to_lines(b"\n"))
-
-        assert  lines == ["a"*8, "b"*8, "c"*8, "d"*8, ]
-
-
-    def test_run(self, dummy_project_dir, monkeypatch):
-        class WriterThread(threading.Thread):
-            def __init__(self, fifo_path: Path):
-                super().__init__()
-                self._fifo_path = fifo_path
-
-            def run(self):
-                print("writer start")
-                with self._fifo_path.open("w") as fd:
-                    fd.write("writer starting\n")
-                    sleep(0.1)
-                    fd.write("next message\n")
-                    sleep(0.1)
-                    fd.write("closing fd\n")
-
-                sleep(0.1)
-                with self._fifo_path.open("w") as fd:
-                    fd.write("reopened fd\n")
-                    sleep(0.1)
-                    fd.write("next message\n")
-                    sleep(0.1)
-                    fd.write("closing fd for good\n")
-
-                print("writer done")
-
-        recorded_lines = []
-
-        def report_lines(_, lines: list[str]) -> None:
-            print(lines)
-            recorded_lines.extend(lines)
-
-        monkeypatch.setattr(CoverageParserThread, "_report_lines", report_lines)
-
+    def test_run(self, dummy_project_dir):
         data_file_path = dummy_project_dir.joinpath("coverage-data.db")
 
+        parser = SpyCovLineParser()
         parser_thread = CoverageParserThread(
-            coverage_data_path=data_file_path, name="CoverageParserThread"
+            coverage_data_path=data_file_path, name="CoverageParserThread", parser=parser
         )
         parser_thread.start()
 
@@ -276,43 +321,13 @@ class TestCoverageParserThread:
         parser_thread.stop()
         parser_thread.join()
 
-        assert recorded_lines == [
-            "writer starting",
-            "next message",
-            "closing fd",
-            "reopened fd",
-            "next message",
-            "closing fd for good",
-        ]
+        assert parser.recorded_lines == line_lines
 
-    def test_report_lines(self, parser_thread):
-        parser_thread._report_lines([])
-
-        lines = [
-            "COV:::/tmp/foo:::1:::a normal line",
-            "COV:::/tmp/bar:::10:::a line\nwith line break",
-            "a line fragment",
-            "COV:::/tmp/bar:::10:::a line with ümläut",
-            "COV:::/tmp/foo:::1:::a  line with ::: triple columns"
-        ]
-
-        parser_thread._report_lines(lines)
-
-        assert parser_thread._line_data == {'/tmp/foo': {1}, '/tmp/bar': {10}}
-
-        with pytest.raises(ValueError, match="could not parse line"):
-            parser_thread._report_lines(["COV:::/tmp/bar:::a line with missing line number", ])
-
-
-    def test_write_trace(self, tmp_path, parser_thread):
-        parser_thread._line_data = {'/tmp/foo': {2,1}, '/tmp/bar': {10}}
-        parser_thread._write_trace()
-
-        db_path = next(tmp_path.glob("coverage.db*"))
-        cov_db = coverage.CoverageData(basename=str(db_path), suffix=False)
+        data_file_path = next(data_file_path.parent.glob(data_file_path.stem + "*"))
+        cov_db = coverage.CoverageData(basename=str(data_file_path), suffix=False)
+        assert cov_db.data_filename() == str(data_file_path)
         cov_db.read()
 
-        assert cov_db.lines("/tmp/foo") == [1,2]
-        assert cov_db.lines("/tmp/bar") == [10]
-
-
+        assert cov_db.measured_files() == set(line_coverage.keys())
+        for filename, lines in line_coverage.items():
+            assert cov_db.lines(filename) == sorted(lines)

@@ -87,68 +87,25 @@ def filename_suffix() -> str:
     return f"{gethostname()}.{os.getpid()}.X{rolls}x"
 
 
-class CoverageParserThread(threading.Thread):
-    def __init__(self, *args, coverage_data_path: Path | None, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._keep_running = True
+class CovLineParser:
+    def __init__(self):
         self._last_line_fragment = ""
-        self._coverage_data_path = coverage_data_path
-        self._line_data = defaultdict(set)
-        self._listening = False
+        self.line_data = defaultdict(set)
 
-        self.fifo_path = TMP_PATH / f"coverage-sh.{filename_suffix()}.pipe"
-        with contextlib.suppress(FileNotFoundError):
-            self.fifo_path.unlink()
-        os.mkfifo(self.fifo_path, mode=stat.S_IRUSR | stat.S_IWUSR)
-
-    def start(self) -> None:
-        super().start()
-        while not self._listening:
-            sleep(0.0001)
-
-    def stop(self) -> None:
-        self._keep_running = False
+    def parse(self, buf: bytes) -> None:
+        self._report_lines(list(self._buf_to_lines(buf)))
 
     def _buf_to_lines(self, buf: bytes) -> Iterator[str]:
         raw = self._last_line_fragment + buf.decode()
         self._last_line_fragment = ""
 
         for line in raw.splitlines(keepends=True):
-            if line.endswith("\n"):
+            if line == "\n":
+                pass
+            elif line.endswith("\n"):
                 yield line[:-1]
             else:
                 self._last_line_fragment = line
-
-    def run(self) -> None:
-        sel = selectors.DefaultSelector()
-        while self._keep_running:
-            # we need to keep reopening the fifo as long as the subprocess is running because multiple bash processes
-            # might write EOFs to it
-            fifo = os.open(self.fifo_path, flags=os.O_RDONLY | os.O_NONBLOCK)
-            sel.register(fifo, selectors.EVENT_READ)
-            self._listening = True
-
-            eof = False
-            data_incoming = True
-            while not eof and (data_incoming or self._keep_running):
-                events = sel.select(timeout=1)
-                data_incoming = len(events) > 0
-                for key, _ in events:
-                    buf = os.read(key.fd, 2**10)
-                    if not buf:
-                        eof = True
-                        break
-                    self._report_lines(list(self._buf_to_lines(buf)))
-
-            # flush our internal buffer
-            self._report_lines([l for l in self._buf_to_lines(b"\n") if l != ""])  # noqa: E741
-
-            sel.unregister(fifo)
-            os.close(fifo)
-
-        self._write_trace()
-        with contextlib.suppress(FileNotFoundError):
-            self.fifo_path.unlink()
 
     def _report_lines(self, lines: list[str]) -> None:
         if not lines:
@@ -165,7 +122,62 @@ class CoverageParserThread(threading.Thread):
             except ValueError as e:
                 raise ValueError(f"could not parse line {line}") from e
 
-            self._line_data[str(path)].add(lineno)
+            self.line_data[str(path)].add(lineno)
+
+    def flush(self) -> None:
+        self.parse(b"\n")
+
+
+class CoverageParserThread(threading.Thread):
+    def __init__(self, *args, coverage_data_path: Path | None, parser: CovLineParser | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._keep_running = True
+        self._coverage_data_path = coverage_data_path
+        self._listening = False
+        self._parser = parser or CovLineParser()
+
+        self.fifo_path = TMP_PATH / f"coverage-sh.{filename_suffix()}.pipe"
+        with contextlib.suppress(FileNotFoundError):
+            self.fifo_path.unlink()
+        os.mkfifo(self.fifo_path, mode=stat.S_IRUSR | stat.S_IWUSR)
+
+    def start(self) -> None:
+        super().start()
+        while not self._listening:
+            sleep(0.0001)
+
+    def stop(self) -> None:
+        self._keep_running = False
+
+    def run(self) -> None:
+        sel = selectors.DefaultSelector()
+        while self._keep_running:
+            # we need to keep reopening the fifo as long as the subprocess is running because multiple bash processes
+            # might write EOFs to it
+            fifo = os.open(self.fifo_path, flags=os.O_RDONLY | os.O_NONBLOCK)
+            sel.register(fifo, selectors.EVENT_READ)
+            self._listening = True
+
+            eof = False
+            data_incoming = True
+            while not eof and (data_incoming or self._keep_running):
+                events = sel.select(timeout=1)
+                data_incoming = len(events) > 0
+                for key, _ in events:
+                    buf = os.read(key.fd, 2 ** 10)
+                    if not buf:
+                        eof = True
+                        break
+                    self._parser.parse(buf)
+
+            self._parser.flush()
+
+            sel.unregister(fifo)
+            os.close(fifo)
+
+        self._write_trace()
+        with contextlib.suppress(FileNotFoundError):
+            self.fifo_path.unlink()
 
     def _write_trace(self) -> None:
         suffix_ = "sh." + filename_suffix()
@@ -177,10 +189,11 @@ class CoverageParserThread(threading.Thread):
         )
 
         coverage_data.add_file_tracers(
-            {f: "coverage_sh.ShellPlugin" for f in self._line_data}
+            {f: "coverage_sh.ShellPlugin" for f in self._parser.line_data}
         )
-        coverage_data.add_lines(self._line_data)
+        coverage_data.add_lines(self._parser.line_data)
         coverage_data.write()
+
 
 
 OriginalPopen = subprocess.Popen
@@ -290,14 +303,14 @@ class ShellPlugin(CoveragePlugin):
         return None
 
     def file_reporter(
-        self,
-        filename: str,
+            self,
+            filename: str,
     ) -> ShellFileReporter | str:
         return ShellFileReporter(filename)
 
     def find_executable_files(
-        self,
-        src_dir: str,
+            self,
+            src_dir: str,
     ) -> Iterable[str]:
         for f in Path(src_dir).rglob("*"):
             # TODO: Use coverage's logic for figuring out if a file should be excluded
