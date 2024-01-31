@@ -82,4 +82,7 @@ ignore = [
 "tests/**/*.py" = ["ANN", "D", "S101", "PLR2004", "N802", "PT015", "B011", "INP001", "FBT001", "T201"]
 "tests/resources/**/*.py" = ["ALL"]
 
+[tool.coverage.run]
+branch = true
+include = ["coverage_sh/**"]
 
