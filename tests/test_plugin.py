@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -14,7 +15,7 @@ import coverage
 import pytest
 
 from coverage_sh import ShellPlugin
-from coverage_sh.plugin import CoverageParserThread, PatchedPopen
+from coverage_sh.plugin import CoverageParserThread, PatchedPopen, ShellFileReporter, filename_suffix
 
 SYNTAX_EXAMPLE_STDOUT = (
     "Hello, World!\n"
@@ -55,67 +56,11 @@ def test_ShellPlugin_find_executable_files(examples_dir):
     ]
 
 
-def test_CoverageParserThread(dummy_project_dir, monkeypatch):
-    class WriterThread(threading.Thread):
-        def __init__(self, fifo_path: Path):
-            super().__init__()
-            self._fifo_path = fifo_path
-
-        def run(self):
-            print("writer start")
-            with self._fifo_path.open("w") as fd:
-                fd.write("writer starting\n")
-                sleep(0.1)
-                fd.write("next message\n")
-                sleep(0.1)
-                fd.write("closing fd\n")
-
-            sleep(0.1)
-            with self._fifo_path.open("w") as fd:
-                fd.write("reopened fd\n")
-                sleep(0.1)
-                fd.write("next message\n")
-                sleep(0.1)
-                fd.write("closing fd for good\n")
-
-            print("writer done")
-
-    recorded_lines = []
-
-    def report_lines(_, lines: list[str]) -> None:
-        print(lines)
-        recorded_lines.extend(lines)
-
-    monkeypatch.setattr(CoverageParserThread, "_report_lines", report_lines)
-
-    data_file_path = dummy_project_dir.joinpath("coverage-data.db")
-
-    parser_thread = CoverageParserThread(
-        coverage_data_path=data_file_path, name="CoverageParserThread"
-    )
-    parser_thread.start()
-
-    writer_thread = WriterThread(fifo_path=parser_thread.fifo_path)
-    writer_thread.start()
-    writer_thread.join()
-
-    parser_thread.stop()
-    parser_thread.join()
-
-    assert recorded_lines == [
-        "writer starting",
-        "next message",
-        "closing fd",
-        "reopened fd",
-        "next message",
-        "closing fd for good",
-    ]
-
 
 def test_PatchedPopen(
-    resources_dir,
-    dummy_project_dir,
-    monkeypatch,
+        resources_dir,
+        dummy_project_dir,
+        monkeypatch,
 ):
     monkeypatch.chdir(dummy_project_dir)
 
@@ -217,3 +162,157 @@ def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
         60,
         63,
     ]
+
+
+class TestShellFileReporter:
+
+    @pytest.fixture()
+    def reporter(self, examples_dir):
+        return ShellFileReporter(str(examples_dir / "shell-file.weird.suffix"))
+
+    def test_source(self, reporter):
+        reference = Path(reporter.path).read_text()
+
+        assert reporter.source() == reference
+        assert reporter._content == reference
+        assert reporter.source() == reference
+
+    def test_lines(self, reporter):
+        assert reporter.lines() == {12,
+                                    15,
+                                    18,
+                                    19,
+                                    21,
+                                    25,
+                                    26,
+                                    31,
+                                    34,
+                                    37,
+                                    38,
+                                    41,
+                                    42,
+                                    45,
+                                    46,
+                                    47,
+                                    48,
+                                    51,
+                                    52,
+                                    54,
+                                    57,
+                                    60,
+                                    63}
+
+
+def test_filename_suffix():
+    suffix = filename_suffix()
+    assert re.match(r"\w+\.\d+\.[a-zA-Z]+", suffix)
+
+
+class TestCoverageParserThread:
+
+    @pytest.fixture()
+    def parser_thread(self, tmp_path):
+        data_path = tmp_path / "coverage.db"
+        return CoverageParserThread(
+            coverage_data_path=data_path, name="CoverageParserThread"
+        )
+
+    def test_buf_to_lines(self, parser_thread):
+        lines = []
+        lines.extend(parser_thread._buf_to_lines(b"a" * 8 + b"\n"))
+        lines.extend(parser_thread._buf_to_lines(b"b" * 4))
+        lines.extend(parser_thread._buf_to_lines(b"b" * 4 + b"\n" + b"c" * 4))
+        lines.extend(parser_thread._buf_to_lines(b"c" * 4 + b"\n"))
+        lines.extend(parser_thread._buf_to_lines(b"d" * 8))
+        lines.extend(parser_thread._buf_to_lines(b"\n"))
+
+        assert  lines == ["a"*8, "b"*8, "c"*8, "d"*8, ]
+
+
+    def test_run(self, dummy_project_dir, monkeypatch):
+        class WriterThread(threading.Thread):
+            def __init__(self, fifo_path: Path):
+                super().__init__()
+                self._fifo_path = fifo_path
+
+            def run(self):
+                print("writer start")
+                with self._fifo_path.open("w") as fd:
+                    fd.write("writer starting\n")
+                    sleep(0.1)
+                    fd.write("next message\n")
+                    sleep(0.1)
+                    fd.write("closing fd\n")
+
+                sleep(0.1)
+                with self._fifo_path.open("w") as fd:
+                    fd.write("reopened fd\n")
+                    sleep(0.1)
+                    fd.write("next message\n")
+                    sleep(0.1)
+                    fd.write("closing fd for good\n")
+
+                print("writer done")
+
+        recorded_lines = []
+
+        def report_lines(_, lines: list[str]) -> None:
+            print(lines)
+            recorded_lines.extend(lines)
+
+        monkeypatch.setattr(CoverageParserThread, "_report_lines", report_lines)
+
+        data_file_path = dummy_project_dir.joinpath("coverage-data.db")
+
+        parser_thread = CoverageParserThread(
+            coverage_data_path=data_file_path, name="CoverageParserThread"
+        )
+        parser_thread.start()
+
+        writer_thread = WriterThread(fifo_path=parser_thread.fifo_path)
+        writer_thread.start()
+        writer_thread.join()
+
+        parser_thread.stop()
+        parser_thread.join()
+
+        assert recorded_lines == [
+            "writer starting",
+            "next message",
+            "closing fd",
+            "reopened fd",
+            "next message",
+            "closing fd for good",
+        ]
+
+    def test_report_lines(self, parser_thread):
+        parser_thread._report_lines([])
+
+        lines = [
+            "COV:::/tmp/foo:::1:::a normal line",
+            "COV:::/tmp/bar:::10:::a line\nwith line break",
+            "a line fragment",
+            "COV:::/tmp/bar:::10:::a line with ümläut",
+            "COV:::/tmp/foo:::1:::a  line with ::: triple columns"
+        ]
+
+        parser_thread._report_lines(lines)
+
+        assert parser_thread._line_data == {'/tmp/foo': {1}, '/tmp/bar': {10}}
+
+        with pytest.raises(ValueError, match="could not parse line"):
+            parser_thread._report_lines(["COV:::/tmp/bar:::a line with missing line number", ])
+
+
+    def test_write_trace(self, tmp_path, parser_thread):
+        parser_thread._line_data = {'/tmp/foo': {2,1}, '/tmp/bar': {10}}
+        parser_thread._write_trace()
+
+        db_path = next(tmp_path.glob("coverage.db*"))
+        cov_db = coverage.CoverageData(basename=str(db_path), suffix=False)
+        cov_db.read()
+
+        assert cov_db.lines("/tmp/foo") == [1,2]
+        assert cov_db.lines("/tmp/bar") == [10]
+
+

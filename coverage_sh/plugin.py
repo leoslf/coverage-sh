@@ -80,13 +80,11 @@ class ShellFileReporter(FileReporter):
         return self._executable_lines
 
 
-def filename_suffix(*, add_random: bool = True) -> str:
+def filename_suffix() -> str:
     die = Random(os.urandom(8))
     letters = string.ascii_uppercase + string.ascii_lowercase
     rolls = "".join(die.choice(letters) for _ in range(6))
-    if add_random:
-        return f"{gethostname()}.{os.getpid()}.X{rolls}x"
-    return f"{gethostname()}.{os.getpid()}"
+    return f"{gethostname()}.{os.getpid()}.X{rolls}x"
 
 
 class CoverageParserThread(threading.Thread):
@@ -161,7 +159,7 @@ class CoverageParserThread(threading.Thread):
                 continue
 
             try:
-                _, path_, lineno_, _ = line.split(":::")
+                _, path_, lineno_, _ = line.split(":::", maxsplit=3)
                 lineno = int(lineno_)
                 path = Path(path_).absolute()
             except ValueError as e:
