@@ -24,6 +24,7 @@ jobs:
       - uses: eifinger/setup-rye@v1
         with:
           enable-cache: true
+          version: '0.19.0'
       - name: "Pin python-version ${{ matrix.python-version }}"
         run: rye pin ${{ matrix.python-version }}
       - name: Install dependencies
