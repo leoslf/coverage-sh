@@ -24,6 +24,7 @@ jobs:
       - uses: eifinger/setup-rye@v1
         with:
           enable-cache: true
+          version: '0.19.0'
       - name: "Pin python-version ${{ matrix.python-version }}"
         run: rye pin ${{ matrix.python-version }}
       - name: Install dependencies
@@ -36,4 +37,50 @@ jobs:
           rye run ruff check .
       - name: Test with pytest
         run: |
-          rye run pytest
+          rye run coverage run --parallel-mode -m pytest
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-${{ matrix.python-version }}
+          path: .coverage.*
+          if-no-files-found: ignore
+
+
+  coverage:
+    name: Combine & check coverage.
+    runs-on: ubuntu-latest
+    needs: lint_test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-*
+          merge-multiple: true
+
+      - name: Combine coverage & fail if it's <100%.
+        run: |
+          python -Im pip install coverage[toml]
+          
+          rm .coverage.sh.*
+          python -Im coverage combine
+          python -Im coverage html --skip-covered --skip-empty
+          
+          # Report and write to summary.
+          python -Im coverage report --format=markdown >> $GITHUB_STEP_SUMMARY
+          
+          # Report again and fail if under 100%.
+          python -Im coverage report --fail-under=100
+
+      - name: Upload HTML report if check failed.
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report
+          path: htmlcov
+        if: ${{ failure() }}

@@ -16,7 +16,7 @@ from pathlib import Path
 from random import Random
 from socket import gethostname
 from time import sleep
-from typing import TYPE_CHECKING, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 import coverage
 import magic
@@ -80,23 +80,67 @@ class ShellFileReporter(FileReporter):
         return self._executable_lines
 
 
-def filename_suffix(*, add_random: bool = True) -> str:
+def filename_suffix() -> str:
     die = Random(os.urandom(8))
     letters = string.ascii_uppercase + string.ascii_lowercase
     rolls = "".join(die.choice(letters) for _ in range(6))
-    if add_random:
-        return f"{gethostname()}.{os.getpid()}.X{rolls}x"
-    return f"{gethostname()}.{os.getpid()}"
+    return f"{gethostname()}.{os.getpid()}.X{rolls}x"
+
+
+class CovLineParser:
+    def __init__(self):
+        self._last_line_fragment = ""
+        self.line_data = defaultdict(set)
+
+    def parse(self, buf: bytes) -> None:
+        self._report_lines(list(self._buf_to_lines(buf)))
+
+    def _buf_to_lines(self, buf: bytes) -> Iterator[str]:
+        raw = self._last_line_fragment + buf.decode()
+        self._last_line_fragment = ""
+
+        for line in raw.splitlines(keepends=True):
+            if line == "\n":
+                pass
+            elif line.endswith("\n"):
+                yield line[:-1]
+            else:
+                self._last_line_fragment = line
+
+    def _report_lines(self, lines: list[str]) -> None:
+        if not lines:
+            return
+
+        for line in lines:
+            if "COV:::" not in line:
+                continue
+
+            try:
+                _, path_, lineno_, _ = line.split(":::", maxsplit=3)
+                lineno = int(lineno_)
+                path = Path(path_).absolute()
+            except ValueError as e:
+                raise ValueError(f"could not parse line {line}") from e
+
+            self.line_data[str(path)].add(lineno)
+
+    def flush(self) -> None:
+        self.parse(b"\n")
 
 
 class CoverageParserThread(threading.Thread):
-    def __init__(self, *args, coverage_data_path: Path | None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        coverage_data_path: Path | None,
+        parser: CovLineParser | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._keep_running = True
-        self._last_line_fragment = ""
         self._coverage_data_path = coverage_data_path
-        self._line_data = defaultdict(set)
         self._listening = False
+        self._parser = parser or CovLineParser()
 
         self.fifo_path = TMP_PATH / f"coverage-sh.{filename_suffix()}.pipe"
         with contextlib.suppress(FileNotFoundError):
@@ -110,16 +154,6 @@ class CoverageParserThread(threading.Thread):
 
     def stop(self) -> None:
         self._keep_running = False
-
-    def _buf_to_lines(self, buf: bytes) -> Iterator[str]:
-        raw = self._last_line_fragment + buf.decode()
-        self._last_line_fragment = ""
-
-        for line in raw.splitlines(keepends=True):
-            if line.endswith("\n"):
-                yield line[:-1]
-            else:
-                self._last_line_fragment = line
 
     def run(self) -> None:
         sel = selectors.DefaultSelector()
@@ -140,10 +174,9 @@ class CoverageParserThread(threading.Thread):
                     if not buf:
                         eof = True
                         break
-                    self._report_lines(list(self._buf_to_lines(buf)))
+                    self._parser.parse(buf)
 
-            # flush our internal buffer
-            self._report_lines([l for l in self._buf_to_lines(b"\n") if l != ""])  # noqa: E741
+            self._parser.flush()
 
             sel.unregister(fifo)
             os.close(fifo)
@@ -151,23 +184,6 @@ class CoverageParserThread(threading.Thread):
         self._write_trace()
         with contextlib.suppress(FileNotFoundError):
             self.fifo_path.unlink()
-
-    def _report_lines(self, lines: list[str]) -> None:
-        if not lines:
-            return
-
-        for line in lines:
-            if "COV:::" not in line:
-                continue
-
-            try:
-                _, path_, lineno_, _ = line.split(":::")
-                lineno = int(lineno_)
-                path = Path(path_).absolute()
-            except ValueError as e:
-                raise ValueError(f"could not parse line {line}") from e
-
-            self._line_data[str(path)].add(lineno)
 
     def _write_trace(self) -> None:
         suffix_ = "sh." + filename_suffix()
@@ -179,9 +195,9 @@ class CoverageParserThread(threading.Thread):
         )
 
         coverage_data.add_file_tracers(
-            {f: "coverage_sh.ShellPlugin" for f in self._line_data}
+            {f: "coverage_sh.ShellPlugin" for f in self._parser.line_data}
         )
-        coverage_data.add_lines(self._line_data)
+        coverage_data.add_lines(self._parser.line_data)
         coverage_data.write()
 
 
@@ -233,6 +249,7 @@ class PatchedPopen(OriginalPopen):
     def wait(self, timeout: float | None = None) -> int:
         retval = super().wait(timeout)
         if self._parser_thread is None:
+            # no coverage recording was active during __init__
             return retval
 
         self._parser_thread.stop()
@@ -243,19 +260,25 @@ class PatchedPopen(OriginalPopen):
 
 
 class MonitorThread(threading.Thread):
-    def __init__(self, *args, parser_thread: CoverageParserThread, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        parser_thread: CoverageParserThread,
+        main_thread: threading.Thread | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
+        self._main_thread = main_thread or threading.main_thread()
         self.parser_thread = parser_thread
 
     def run(self) -> None:
-        main_thread = threading.main_thread()
-        main_thread.join()
+        self._main_thread.join()
         self.parser_thread.stop()
         self.parser_thread.join()
 
 
 class ShellPlugin(CoveragePlugin):
-    def __init__(self, options: dict[str, str]):
+    def __init__(self, options: dict[str, Any]):
         self.options = options
         self._helper_path = None
 
