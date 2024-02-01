@@ -129,7 +129,13 @@ class CovLineParser:
 
 
 class CoverageParserThread(threading.Thread):
-    def __init__(self, *args, coverage_data_path: Path | None, parser: CovLineParser | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        coverage_data_path: Path | None,
+        parser: CovLineParser | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._keep_running = True
         self._coverage_data_path = coverage_data_path
@@ -164,7 +170,7 @@ class CoverageParserThread(threading.Thread):
                 events = sel.select(timeout=1)
                 data_incoming = len(events) > 0
                 for key, _ in events:
-                    buf = os.read(key.fd, 2 ** 10)
+                    buf = os.read(key.fd, 2**10)
                     if not buf:
                         eof = True
                         break
@@ -193,7 +199,6 @@ class CoverageParserThread(threading.Thread):
         )
         coverage_data.add_lines(self._parser.line_data)
         coverage_data.write()
-
 
 
 OriginalPopen = subprocess.Popen
@@ -244,6 +249,7 @@ class PatchedPopen(OriginalPopen):
     def wait(self, timeout: float | None = None) -> int:
         retval = super().wait(timeout)
         if self._parser_thread is None:
+            # no coverage recording was active during __init__
             return retval
 
         self._parser_thread.stop()
@@ -254,13 +260,19 @@ class PatchedPopen(OriginalPopen):
 
 
 class MonitorThread(threading.Thread):
-    def __init__(self, *args, parser_thread: CoverageParserThread, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        parser_thread: CoverageParserThread,
+        main_thread: threading.Thread | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
+        self._main_thread = main_thread or threading.main_thread()
         self.parser_thread = parser_thread
 
     def run(self) -> None:
-        main_thread = threading.main_thread()
-        main_thread.join()
+        self._main_thread.join()
         self.parser_thread.stop()
         self.parser_thread.join()
 
@@ -303,14 +315,14 @@ class ShellPlugin(CoveragePlugin):
         return None
 
     def file_reporter(
-            self,
-            filename: str,
+        self,
+        filename: str,
     ) -> ShellFileReporter | str:
         return ShellFileReporter(filename)
 
     def find_executable_files(
-            self,
-            src_dir: str,
+        self,
+        src_dir: str,
     ) -> Iterable[str]:
         for f in Path(src_dir).rglob("*"):
             # TODO: Use coverage's logic for figuring out if a file should be excluded
