@@ -16,7 +16,7 @@ from pathlib import Path
 from random import Random
 from socket import gethostname
 from time import sleep
-from typing import TYPE_CHECKING, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 import coverage
 import magic
@@ -278,7 +278,7 @@ class MonitorThread(threading.Thread):
 
 
 class ShellPlugin(CoveragePlugin):
-    def __init__(self, options: dict[str, str]):
+    def __init__(self, options: dict[str, Any]):
         self.options = options
         self._helper_path = None
 

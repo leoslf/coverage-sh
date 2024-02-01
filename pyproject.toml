@@ -85,4 +85,10 @@ ignore = [
 [tool.coverage.run]
 branch = true
 include = ["coverage_sh/**"]
+omit = ["coverage_sh/__init__.py"]
 
+[tool.coverage.report]
+
+exclude_also = [
+    "if TYPE_CHECKING:",
+]

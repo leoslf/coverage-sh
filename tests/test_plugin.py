@@ -372,6 +372,10 @@ class TestMonitorThread:
 
 
 class TestShellPlugin:
+    def test_init_cover_always(self):
+        plugin = ShellPlugin({"cover_always": True})
+        del plugin
+
     def test_file_tracer(self):
         plugin = ShellPlugin({})
         assert plugin.file_tracer("foobar") is None
