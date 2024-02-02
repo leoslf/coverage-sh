@@ -57,8 +57,8 @@ class ShellFileReporter(FileReporter):
         super().__init__(filename)
 
         self.path = Path(filename)
-        self._content = None
-        self._executable_lines = set()
+        self._content: str | None = None
+        self._executable_lines: set[int] = set()
 
     def source(self) -> str:
         if self._content is None:
@@ -88,9 +88,9 @@ def filename_suffix() -> str:
 
 
 class CovLineParser:
-    def __init__(self):
+    def __init__(self) -> None:
         self._last_line_fragment = ""
-        self.line_data = defaultdict(set)
+        self.line_data: dict[str, set[int]] = defaultdict(set)
 
     def parse(self, buf: bytes) -> None:
         self._report_lines(list(self._buf_to_lines(buf)))
@@ -131,12 +131,11 @@ class CovLineParser:
 class CoverageParserThread(threading.Thread):
     def __init__(
         self,
-        *args,
         coverage_data_path: Path | None,
+            name : str|None = None,
         parser: CovLineParser | None = None,
-        **kwargs,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(name=name)
         self._keep_running = True
         self._coverage_data_path = coverage_data_path
         self._listening = False
@@ -221,7 +220,7 @@ set -x
 class PatchedPopen(OriginalPopen):
     data_file_path: Path = Path.cwd()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         if coverage.Coverage.current() is None:
             # we are not recording coverage, so just act like the original Popen
             self._parser_thread = None
@@ -262,12 +261,11 @@ class PatchedPopen(OriginalPopen):
 class MonitorThread(threading.Thread):
     def __init__(
         self,
-        *args,
         parser_thread: CoverageParserThread,
         main_thread: threading.Thread | None = None,
-        **kwargs,
+            name: str | None = None,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(name=name)
         self._main_thread = main_thread or threading.main_thread()
         self.parser_thread = parser_thread
 
@@ -299,10 +297,10 @@ class ShellPlugin(CoveragePlugin):
             os.environ["BASH_ENV"] = str(self._helper_path)
             os.environ["ENV"] = str(self._helper_path)
         else:
-            PatchedPopen.data_file_path: Path = coverage_data_path
+            PatchedPopen.data_file_path = coverage_data_path
             subprocess.Popen = PatchedPopen
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self._helper_path is not None:
             with contextlib.suppress(FileNotFoundError):
                 self._helper_path.unlink()
