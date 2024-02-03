@@ -307,7 +307,7 @@ class ShellPlugin(CoveragePlugin):
 
     @staticmethod
     def _is_relevant(path: Path) -> bool:
-        return magic.from_file(path, mime=True) in SUPPORTED_MIME_TYPES
+        return magic.from_file(path.resolve(), mime=True) in SUPPORTED_MIME_TYPES
 
     def file_tracer(self, filename: str) -> FileTracer | None:  # noqa: ARG002
         return None
@@ -324,7 +324,9 @@ class ShellPlugin(CoveragePlugin):
     ) -> Iterable[str]:
         for f in Path(src_dir).rglob("*"):
             # TODO: Use coverage's logic for figuring out if a file should be excluded
-            if not f.is_file() or any(p.startswith(".") for p in f.parts):
+            if not (f.is_file() or f.is_symlink()) or any(
+                p.startswith(".") for p in f.parts
+            ):
                 continue
 
             if self._is_relevant(f):
