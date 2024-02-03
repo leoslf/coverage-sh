@@ -127,7 +127,7 @@ def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
             check=False,
             timeout=2,
         )
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired as e:  # pragma: no cover
         assert e.stdout == "failed stdout"  # noqa: PT017
         assert e.stderr == "failed stderr"  # noqa: PT017
         assert False
@@ -319,7 +319,7 @@ class TestPatchedPopen:
         cov = None
         if is_recording:
             cov = coverage.Coverage.current()
-            if cov is None:
+            if cov is None:  # pragma: no cover
                 # start coverage in case pytest was not executed with the coverage module. Otherwise, we just recod to
                 # the parent coverage
                 cov = coverage.Coverage()
@@ -336,7 +336,7 @@ class TestPatchedPopen:
         )
         proc.wait()
 
-        if cov is not None:
+        if cov is not None:  # pragma: no cover
             cov.stop()
 
         assert proc.stderr.read() == ""

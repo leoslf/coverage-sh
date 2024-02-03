@@ -88,7 +88,7 @@ strict = true
 
 [tool.coverage.run]
 branch = true
-include = ["coverage_sh/**"]
+include = ["coverage_sh/**", "tests/**"]
 omit = ["coverage_sh/__init__.py"]
 
 [tool.coverage.report]
