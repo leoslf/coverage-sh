@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import threading
+from collections import defaultdict
 from pathlib import Path
 from socket import gethostname
 from time import sleep
@@ -17,7 +18,9 @@ import pytest
 from coverage_sh import ShellPlugin
 from coverage_sh.plugin import (
     CoverageParserThread,
+    CoverageWriter,
     CovLineParser,
+    LineData,
     MonitorThread,
     PatchedPopen,
     ShellFileReporter,
@@ -270,12 +273,18 @@ class TestCoverageParserThread:
             self.recorded_lines.extend(lines)
             super()._report_lines(lines)
 
-    def test_lines_should_match_reference(self, dummy_project_dir):
-        data_file_path = dummy_project_dir.joinpath("coverage-data.db")
+    class CovWriterFake:
+        def __init__(self):
+            self.line_data: LineData = defaultdict(set)
 
+        def write(self, line_data: LineData) -> None:
+            self.line_data.update(line_data)
+
+    def test_lines_should_match_reference(self):
         parser = self.CovLineParserSpy()
+        writer = self.CovWriterFake()
         parser_thread = CoverageParserThread(
-            coverage_data_path=data_file_path,
+            coverage_writer=writer,
             name="CoverageParserThread",
             parser=parser,
         )
@@ -290,9 +299,22 @@ class TestCoverageParserThread:
 
         assert parser.recorded_lines == COVERAGE_LINES
 
-        data_file_path = next(data_file_path.parent.glob(data_file_path.stem + "*"))
-        cov_db = coverage.CoverageData(basename=str(data_file_path), suffix=False)
-        assert cov_db.data_filename() == str(data_file_path)
+        for filename, lines in COVERAGE_LINE_COVERAGE.items():
+            assert writer.line_data[filename] == lines
+
+
+class TestCoverageWriter:
+    def test_write_should_produce_readable_file(self, dummy_project_dir):
+        data_file_path = dummy_project_dir.joinpath("coverage-data.db")
+        writer = CoverageWriter(data_file_path)
+        writer.write(COVERAGE_LINE_COVERAGE)
+
+        concrete_data_file_path = next(
+            data_file_path.parent.glob(data_file_path.stem + "*")
+        )
+        cov_db = coverage.CoverageData(
+            basename=str(concrete_data_file_path), suffix=False
+        )
         cov_db.read()
 
         assert cov_db.measured_files() == set(COVERAGE_LINE_COVERAGE.keys())
@@ -347,7 +369,7 @@ class TestMonitorThread:
         data_file_path = dummy_project_dir.joinpath("coverage-data.db")
 
         parser_thread = CoverageParserThread(
-            coverage_data_path=data_file_path,
+            coverage_writer=CoverageWriter(data_file_path),
         )
         parser_thread.start()
 
