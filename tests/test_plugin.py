@@ -220,6 +220,10 @@ class TestShellFileReporter:
     def test_lines_should_match_reference(self, reporter):
         assert reporter.lines() == SYNTAX_EXAMPLE_EXECUTABLE_LINES
 
+    def test_invalid_syntax_should_be_treated_as_executable(self, resources_dir):
+        reporter = ShellFileReporter(str(resources_dir / "invalid_syntax.sh"))
+        assert reporter.lines() == {9, 12, 15, 18}
+
 
 def test_filename_suffix_should_match_pattern():
     suffix = filename_suffix()
