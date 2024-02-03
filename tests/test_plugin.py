@@ -24,6 +24,32 @@ from coverage_sh.plugin import (
     filename_suffix,
 )
 
+SYNTAX_EXAMPLE_EXECUTABLE_LINES = {
+    12,
+    15,
+    18,
+    19,
+    21,
+    25,
+    26,
+    31,
+    34,
+    37,
+    38,
+    41,
+    42,
+    45,
+    46,
+    47,
+    48,
+    51,
+    52,
+    54,
+    57,
+    60,
+    63,
+}
+
 SYNTAX_EXAMPLE_STDOUT = (
     "Hello, World!\n"
     "Variable is set to 'Hello, World!'\n"
@@ -38,11 +64,46 @@ SYNTAX_EXAMPLE_STDOUT = (
     "This is a sample file.\n"
     "You selected a banana.\n"
 )
+SYNTAX_EXAMPLE_COVERED_LINES = [
+    12,
+    15,
+    18,
+    19,
+    25,
+    26,
+    31,
+    34,
+    37,
+    38,
+    41,
+    42,
+    45,
+    46,
+    47,
+    48,
+    51,
+    52,
+    57,
+]
+SYNTAX_EXAMPLE_MISSING_LINES = [
+    21,
+    54,
+    60,
+    63,
+]
 
 
 @pytest.fixture()
 def examples_dir(resources_dir):
     return resources_dir / "examples"
+
+
+@pytest.fixture()
+def syntax_example_path(resources_dir, tmp_path):
+    original_path = resources_dir / "testproject" / "syntax_example.sh"
+    working_copy_path = tmp_path / "syntax_example.sh"
+    working_copy_path.write_bytes(original_path.read_bytes())
+    return working_copy_path
 
 
 @pytest.mark.parametrize("cover_always", [(True), (False)])
@@ -98,90 +159,38 @@ def test_end2end(dummy_project_dir, monkeypatch, cover_always: bool):
     coverage_json = json.loads(dummy_project_dir.joinpath("coverage.json").read_text())
     assert coverage_json["files"]["test.sh"]["executed_lines"] == [8, 9]
     assert coverage_json["files"]["syntax_example.sh"]["excluded_lines"] == []
-    assert coverage_json["files"]["syntax_example.sh"]["executed_lines"] == [
-        12,
-        15,
-        18,
-        19,
-        25,
-        26,
-        31,
-        34,
-        37,
-        38,
-        41,
-        42,
-        45,
-        46,
-        47,
-        48,
-        51,
-        52,
-        57,
-    ]
-    assert coverage_json["files"]["syntax_example.sh"]["missing_lines"] == [
-        21,
-        54,
-        60,
-        63,
-    ]
+    assert (
+        coverage_json["files"]["syntax_example.sh"]["executed_lines"]
+        == SYNTAX_EXAMPLE_COVERED_LINES
+    )
+    assert (
+        coverage_json["files"]["syntax_example.sh"]["missing_lines"]
+        == SYNTAX_EXAMPLE_MISSING_LINES
+    )
 
 
 class TestShellFileReporter:
     @pytest.fixture()
-    def shell_file(self, tmp_path, examples_dir):
-        sf_path = tmp_path / "foo.sh"
-        sf_path.write_bytes(
-            examples_dir.joinpath("shell-file.weird.suffix").read_bytes()
-        )
+    def reporter(self, syntax_example_path):
+        return ShellFileReporter(str(syntax_example_path))
 
-        return sf_path
-
-    @pytest.fixture()
-    def reporter(self, shell_file):
-        return ShellFileReporter(str(shell_file))
-
-    def test_source(self, shell_file, reporter):
+    def test_source_should_be_cached(self, syntax_example_path, reporter):
         reference = Path(reporter.path).read_text()
 
         assert reporter.source() == reference
-        shell_file.unlink()
+        syntax_example_path.unlink()
         assert reporter.source() == reference
 
-    def test_lines(self, reporter):
-        assert reporter.lines() == {
-            12,
-            15,
-            18,
-            19,
-            21,
-            25,
-            26,
-            31,
-            34,
-            37,
-            38,
-            41,
-            42,
-            45,
-            46,
-            47,
-            48,
-            51,
-            52,
-            54,
-            57,
-            60,
-            63,
-        }
+    def test_lines_should_match_reference(self, reporter):
+        assert reporter.lines() == SYNTAX_EXAMPLE_EXECUTABLE_LINES
 
 
-def test_filename_suffix():
+def test_filename_suffix_should_match_pattern():
     suffix = filename_suffix()
     assert re.match(r".+?\.\d+\.[a-zA-Z]+", suffix)
 
 
-class SpyCovLineParser(CovLineParser):
+class CovLineParserSpy(CovLineParser):
     def __init__(self):
         super().__init__()
         self.recorded_lines = []
@@ -227,25 +236,21 @@ line_coverage = {
 
 
 class TestCovLineParser:
-    def test_parse(self):
-        parser = SpyCovLineParser()
+    def test_parse_result_matches_reference(self):
+        parser = CovLineParserSpy()
         for chunk in line_chunks:
             parser.parse(chunk)
         parser.flush()
 
         assert parser.recorded_lines == line_lines
-
         assert parser.line_data == line_coverage
 
+    def test_parse_should_raise_for_incomplete_line(self):
+        parser = CovLineParserSpy()
         with pytest.raises(ValueError, match="could not parse line"):
             parser.parse(
                 b"COV:::/home/dummy_user/dummy_dir_b:::a line with missing line number\n"
             )
-
-    def test_parse_raises(self):
-        parser = SpyCovLineParser()
-        with pytest.raises(ValueError, match="could not parse line"):
-            parser.parse(b"COV:::foobar\n")
 
 
 class WriterThread(threading.Thread):
@@ -270,10 +275,10 @@ class WriterThread(threading.Thread):
 
 
 class TestCoverageParserThread:
-    def test_run(self, dummy_project_dir):
+    def test_lines_should_match_reference(self, dummy_project_dir):
         data_file_path = dummy_project_dir.joinpath("coverage-data.db")
 
-        parser = SpyCovLineParser()
+        parser = CovLineParserSpy()
         parser_thread = CoverageParserThread(
             coverage_data_path=data_file_path,
             name="CoverageParserThread",
@@ -301,20 +306,26 @@ class TestCoverageParserThread:
 
 
 class TestPatchedPopen:
-    def test_call(
+    @pytest.mark.parametrize("is_recording", [(True), (False)])
+    def test_call_should_execute_example(
         self,
+        is_recording,
         resources_dir,
         dummy_project_dir,
         monkeypatch,
     ):
         monkeypatch.chdir(dummy_project_dir)
 
-        cov = coverage.Coverage.current()
-        if cov is None:
-            # start coverage in case pytest was not executed with the coverage module. Otherwise, we just recod to the
-            # parent coverage
-            cov = coverage.Coverage()
-        cov.start()
+        cov = None
+        if is_recording:
+            cov = coverage.Coverage.current()
+            if cov is None:
+                # start coverage in case pytest was not executed with the coverage module. Otherwise, we just recod to
+                # the parent coverage
+                cov = coverage.Coverage()
+            cov.start()
+        else:
+            monkeypatch.setattr(coverage.Coverage, "current", lambda: None)
 
         test_sh_path = resources_dir / "testproject" / "test.sh"
         proc = PatchedPopen(
@@ -325,39 +336,19 @@ class TestPatchedPopen:
         )
         proc.wait()
 
-        cov.stop()
-
-        assert proc.stderr.read() == ""
-        assert proc.stdout.read() == SYNTAX_EXAMPLE_STDOUT
-
-    def test_call_no_coverage(
-        self,
-        resources_dir,
-        dummy_project_dir,
-        monkeypatch,
-    ):
-        monkeypatch.chdir(dummy_project_dir)
-        monkeypatch.setattr(coverage.Coverage, "current", lambda: None)
-
-        test_sh_path = resources_dir / "testproject" / "test.sh"
-        proc = PatchedPopen(
-            ["/bin/bash", test_sh_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf8",
-        )
-        proc.wait()
+        if cov is not None:
+            cov.stop()
 
         assert proc.stderr.read() == ""
         assert proc.stdout.read() == SYNTAX_EXAMPLE_STDOUT
 
 
 class TestMonitorThread:
-    class StubMainThread:
+    class MainThreadStub:
         def join(self):
             return
 
-    def test_run(self, dummy_project_dir):
+    def test_run_should_wait_for_main_thread_join(self, dummy_project_dir):
         data_file_path = dummy_project_dir.joinpath("coverage-data.db")
 
         parser_thread = CoverageParserThread(
@@ -366,7 +357,7 @@ class TestMonitorThread:
         parser_thread.start()
 
         monitor_thread = MonitorThread(
-            parser_thread=parser_thread, main_thread=self.StubMainThread()
+            parser_thread=parser_thread, main_thread=self.MainThreadStub()
         )
         monitor_thread.start()
 
@@ -376,17 +367,17 @@ class TestShellPlugin:
         plugin = ShellPlugin({"cover_always": True})
         del plugin
 
-    def test_file_tracer(self):
+    def test_file_tracer_should_return_None(self):
         plugin = ShellPlugin({})
         assert plugin.file_tracer("foobar") is None
 
-    def test_file_reporter(self):
+    def test_file_reporter_should_return_instance(self):
         plugin = ShellPlugin({})
         reporter = plugin.file_reporter("foobar")
         assert isinstance(reporter, ShellFileReporter)
         assert reporter.path == Path("foobar")
 
-    def test_find_executable_files(self, examples_dir):
+    def test_find_executable_files_should_find_shell_files(self, examples_dir):
         plugin = ShellPlugin({})
 
         executable_files = plugin.find_executable_files(str(examples_dir))
