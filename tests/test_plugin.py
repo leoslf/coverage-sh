@@ -91,6 +91,39 @@ SYNTAX_EXAMPLE_MISSING_LINES = [
     60,
     63,
 ]
+COVERAGE_LINE_CHUNKS = (
+    b"""\
+CCOV:::/home/dummy_user/dummy_dir_a:::1:::a normal line
+COV:::/home/dummy_user/dummy_dir_b:::10:::a line
+with a line fragment
+
+COV:::/home/dummy_user/dummy_dir_a:::2:::a  line with ::: triple columns
+COV:::/home/dummy_user/dummy_dir_a:::3:::a  line """,
+    b"that spans multiple chunks\n",
+    b"C",
+    b"O",
+    b"V",
+    b":",
+    b":",
+    b":",
+    b"/",
+    b"ho",
+    b"m",
+    b"e",
+    b"/dummy_user/dummy_dir_a:::4:::a chunked line",
+)
+COVERAGE_LINES = [
+    "CCOV:::/home/dummy_user/dummy_dir_a:::1:::a normal line",
+    "COV:::/home/dummy_user/dummy_dir_b:::10:::a line",
+    "with a line fragment",
+    "COV:::/home/dummy_user/dummy_dir_a:::2:::a  line with ::: triple columns",
+    "COV:::/home/dummy_user/dummy_dir_a:::3:::a  line that spans multiple chunks",
+    "COV:::/home/dummy_user/dummy_dir_a:::4:::a chunked line",
+]
+COVERAGE_LINE_COVERAGE = {
+    "/home/dummy_user/dummy_dir_a": {1, 2, 3, 4},
+    "/home/dummy_user/dummy_dir_b": {10},
+}
 
 
 @pytest.fixture()
@@ -100,7 +133,7 @@ def examples_dir(resources_dir):
 
 @pytest.fixture()
 def syntax_example_path(resources_dir, tmp_path):
-    original_path = resources_dir / "testproject" / "syntax_example.sh"
+    original_path = resources_dir / "syntax_example.sh"
     working_copy_path = tmp_path / "syntax_example.sh"
     working_copy_path.write_bytes(original_path.read_bytes())
     return working_copy_path
@@ -190,95 +223,57 @@ def test_filename_suffix_should_match_pattern():
     assert re.match(r".+?\.\d+\.[a-zA-Z]+", suffix)
 
 
-class CovLineParserSpy(CovLineParser):
-    def __init__(self):
-        super().__init__()
-        self.recorded_lines = []
-
-    def _report_lines(self, lines: list[str]) -> None:
-        self.recorded_lines.extend(lines)
-        super()._report_lines(lines)
-
-
-line_chunks = (
-    b"""\
-COV:::/home/dummy_user/dummy_dir_a:::1:::a normal line,
-COV:::/home/dummy_user/dummy_dir_b:::10:::a line
-with a line fragment
-
-COV:::/home/dummy_user/dummy_dir_a:::2:::a  line with ::: triple columns
-COV:::/home/dummy_user/dummy_dir_a:::3:::a  line """,
-    b"that spans multiple chunks\n",
-    b"C",
-    b"O",
-    b"V",
-    b":",
-    b":",
-    b":",
-    b"/",
-    b"ho",
-    b"m",
-    b"e",
-    b"/dummy_user/dummy_dir_a:::4:::a chunked line",
-)
-line_lines = [
-    "COV:::/home/dummy_user/dummy_dir_a:::1:::a normal line,",
-    "COV:::/home/dummy_user/dummy_dir_b:::10:::a line",
-    "with a line fragment",
-    "COV:::/home/dummy_user/dummy_dir_a:::2:::a  line with ::: triple columns",
-    "COV:::/home/dummy_user/dummy_dir_a:::3:::a  line that spans multiple chunks",
-    "COV:::/home/dummy_user/dummy_dir_a:::4:::a chunked line",
-]
-line_coverage = {
-    "/home/dummy_user/dummy_dir_a": {1, 2, 3, 4},
-    "/home/dummy_user/dummy_dir_b": {10},
-}
-
-
 class TestCovLineParser:
     def test_parse_result_matches_reference(self):
-        parser = CovLineParserSpy()
-        for chunk in line_chunks:
+        parser = CovLineParser()
+        for chunk in COVERAGE_LINE_CHUNKS:
             parser.parse(chunk)
         parser.flush()
 
-        assert parser.recorded_lines == line_lines
-        assert parser.line_data == line_coverage
+        assert parser.line_data == COVERAGE_LINE_COVERAGE
 
     def test_parse_should_raise_for_incomplete_line(self):
-        parser = CovLineParserSpy()
+        parser = CovLineParser()
         with pytest.raises(ValueError, match="could not parse line"):
             parser.parse(
                 b"COV:::/home/dummy_user/dummy_dir_b:::a line with missing line number\n"
             )
 
 
-class WriterThread(threading.Thread):
-    def __init__(self, fifo_path: Path):
-        super().__init__()
-        self._fifo_path = fifo_path
-
-    def run(self):
-        print("writer start")
-        with self._fifo_path.open("wb") as fd:
-            for c in line_chunks[0:2]:
-                fd.write(c)
-                sleep(0.1)
-
-        sleep(0.1)
-        with self._fifo_path.open("wb") as fd:
-            for c in line_chunks[2:]:
-                fd.write(c)
-                sleep(0.1)
-
-        print("writer done")
-
-
 class TestCoverageParserThread:
+    class WriterThread(threading.Thread):
+        def __init__(self, fifo_path: Path):
+            super().__init__()
+            self._fifo_path = fifo_path
+
+        def run(self):
+            print("writer start")
+            with self._fifo_path.open("wb") as fd:
+                for c in COVERAGE_LINE_CHUNKS[0:2]:
+                    fd.write(c)
+                    sleep(0.1)
+
+            sleep(0.1)
+            with self._fifo_path.open("wb") as fd:
+                for c in COVERAGE_LINE_CHUNKS[2:]:
+                    fd.write(c)
+                    sleep(0.1)
+
+            print("writer done")
+
+    class CovLineParserSpy(CovLineParser):
+        def __init__(self):
+            super().__init__()
+            self.recorded_lines = []
+
+        def _report_lines(self, lines: list[str]) -> None:
+            self.recorded_lines.extend(lines)
+            super()._report_lines(lines)
+
     def test_lines_should_match_reference(self, dummy_project_dir):
         data_file_path = dummy_project_dir.joinpath("coverage-data.db")
 
-        parser = CovLineParserSpy()
+        parser = self.CovLineParserSpy()
         parser_thread = CoverageParserThread(
             coverage_data_path=data_file_path,
             name="CoverageParserThread",
@@ -286,22 +281,22 @@ class TestCoverageParserThread:
         )
         parser_thread.start()
 
-        writer_thread = WriterThread(fifo_path=parser_thread.fifo_path)
+        writer_thread = self.WriterThread(fifo_path=parser_thread.fifo_path)
         writer_thread.start()
         writer_thread.join()
 
         parser_thread.stop()
         parser_thread.join()
 
-        assert parser.recorded_lines == line_lines
+        assert parser.recorded_lines == COVERAGE_LINES
 
         data_file_path = next(data_file_path.parent.glob(data_file_path.stem + "*"))
         cov_db = coverage.CoverageData(basename=str(data_file_path), suffix=False)
         assert cov_db.data_filename() == str(data_file_path)
         cov_db.read()
 
-        assert cov_db.measured_files() == set(line_coverage.keys())
-        for filename, lines in line_coverage.items():
+        assert cov_db.measured_files() == set(COVERAGE_LINE_COVERAGE.keys())
+        for filename, lines in COVERAGE_LINE_COVERAGE.items():
             assert cov_db.lines(filename) == sorted(lines)
 
 
