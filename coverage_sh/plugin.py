@@ -49,8 +49,6 @@ EXECUTABLE_NODE_TYPES = {
 }
 SUPPORTED_MIME_TYPES = {"text/x-shellscript"}
 
-parser = get_parser("bash")
-
 
 class ShellFileReporter(FileReporter):
     def __init__(self, filename: str) -> None:
@@ -59,6 +57,7 @@ class ShellFileReporter(FileReporter):
         self.path = Path(filename)
         self._content: str | None = None
         self._executable_lines: set[int] = set()
+        self._parser = get_parser("bash")
 
     def source(self) -> str:
         if self._content is None:
@@ -74,7 +73,7 @@ class ShellFileReporter(FileReporter):
             self._parse_ast(child)
 
     def lines(self) -> set[TLineNo]:
-        tree = parser.parse(self.source().encode("utf-8"))
+        tree = self._parser.parse(self.source().encode("utf-8"))
         self._parse_ast(tree.root_node)
 
         return self._executable_lines
