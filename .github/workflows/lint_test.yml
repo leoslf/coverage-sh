@@ -73,12 +73,16 @@ jobs:
           rm .coverage.sh.*
           python -Im coverage combine
           python -Im coverage html --skip-covered --skip-empty
+          python -Im coverage json
           
           # Report and write to summary.
           python -Im coverage report --format=markdown >> $GITHUB_STEP_SUMMARY
           
           # Report again and fail if under 100%.
           python -Im coverage report --fail-under=100
+          
+          export TOTAL=$(python -c "import json;print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
+          echo "total=$TOTAL" >> $GITHUB_ENV
 
       - name: Upload HTML report if check failed.
         uses: actions/upload-artifact@v4
@@ -86,3 +90,16 @@ jobs:
           name: html-report
           path: htmlcov
         if: ${{ failure() }}
+
+      - name: "Make badge"
+        if: github.ref == 'refs/heads/main'
+        uses: "schneegans/dynamic-badges-action@v1.4.0"
+        with:
+          auth: ${{ secrets.GIST_TOKEN }}
+          gistID: f16009049fe5091e6d750a7bb7b4d68a
+          filename: covbadge.json
+          label: Coverage
+          message: ${{ env.total }}%
+          minColorRange: 50
+          maxColorRange: 90
+          valColorRange: ${{ env.total }}
