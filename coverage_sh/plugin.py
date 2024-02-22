@@ -10,6 +10,7 @@ import selectors
 import stat
 import string
 import subprocess
+import sys
 import threading
 from collections import defaultdict
 from pathlib import Path
@@ -26,6 +27,13 @@ from tree_sitter_languages import get_parser
 if TYPE_CHECKING:
     from coverage.types import TLineNo
     from tree_sitter import Node
+
+if sys.version_info < (3, 9):
+    from typing import Dict, Set
+
+    LineData = Dict[str, Set[int]]
+else:
+    LineData = dict[str, set[int]]
 
 TMP_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))  # noqa: S108
 TRACEFILE_PREFIX = "shelltrace"
@@ -84,9 +92,6 @@ def filename_suffix() -> str:
     letters = string.ascii_uppercase + string.ascii_lowercase
     rolls = "".join(die.choice(letters) for _ in range(6))
     return f"{gethostname()}.{os.getpid()}.X{rolls}x"
-
-
-LineData = dict[str, set[int]]
 
 
 class CovLineParser:
