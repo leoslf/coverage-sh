@@ -10,6 +10,7 @@ import selectors
 import stat
 import string
 import subprocess
+import sys
 import threading
 from collections import defaultdict
 from pathlib import Path
@@ -26,6 +27,13 @@ from tree_sitter_languages import get_parser
 if TYPE_CHECKING:
     from coverage.types import TLineNo
     from tree_sitter import Node
+
+if sys.version_info < (3, 9):
+    from typing import Dict, Set
+
+    LineData = Dict[str, Set[int]]
+else:
+    LineData = dict[str, set[int]]
 
 TMP_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))  # noqa: S108
 TRACEFILE_PREFIX = "shelltrace"
@@ -49,16 +57,15 @@ EXECUTABLE_NODE_TYPES = {
 }
 SUPPORTED_MIME_TYPES = {"text/x-shellscript"}
 
-parser = get_parser("bash")
-
 
 class ShellFileReporter(FileReporter):
     def __init__(self, filename: str) -> None:
         super().__init__(filename)
 
         self.path = Path(filename)
-        self._content = None
-        self._executable_lines = set()
+        self._content: str | None = None
+        self._executable_lines: set[int] = set()
+        self._parser = get_parser("bash")
 
     def source(self) -> str:
         if self._content is None:
@@ -74,7 +81,7 @@ class ShellFileReporter(FileReporter):
             self._parse_ast(child)
 
     def lines(self) -> set[TLineNo]:
-        tree = parser.parse(self.source().encode("utf-8"))
+        tree = self._parser.parse(self.source().encode("utf-8"))
         self._parse_ast(tree.root_node)
 
         return self._executable_lines
@@ -88,9 +95,9 @@ def filename_suffix() -> str:
 
 
 class CovLineParser:
-    def __init__(self):
+    def __init__(self) -> None:
         self._last_line_fragment = ""
-        self.line_data = defaultdict(set)
+        self.line_data: LineData = defaultdict(set)
 
     def parse(self, buf: bytes) -> None:
         self._report_lines(list(self._buf_to_lines(buf)))
@@ -128,19 +135,38 @@ class CovLineParser:
         self.parse(b"\n")
 
 
+class CoverageWriter:
+    def __init__(self, coverage_data_path: Path):
+        self._coverage_data_path = coverage_data_path
+
+    def write(self, line_data: LineData) -> None:
+        suffix_ = "sh." + filename_suffix()
+        coverage_data = coverage.CoverageData(
+            # TODO: This probably wont work with pytest-cov
+            basename=self._coverage_data_path,
+            suffix=suffix_,
+            # TODO: set warn, debug and no_disk
+        )
+
+        coverage_data.add_file_tracers(
+            {f: "coverage_sh.ShellPlugin" for f in line_data}
+        )
+        coverage_data.add_lines(line_data)
+        coverage_data.write()
+
+
 class CoverageParserThread(threading.Thread):
     def __init__(
         self,
-        *args,
-        coverage_data_path: Path | None,
+        coverage_writer: CoverageWriter,
+        name: str | None = None,
         parser: CovLineParser | None = None,
-        **kwargs,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(name=name)
         self._keep_running = True
-        self._coverage_data_path = coverage_data_path
         self._listening = False
         self._parser = parser or CovLineParser()
+        self._coverage_writer = coverage_writer
 
         self.fifo_path = TMP_PATH / f"coverage-sh.{filename_suffix()}.pipe"
         with contextlib.suppress(FileNotFoundError):
@@ -181,24 +207,9 @@ class CoverageParserThread(threading.Thread):
             sel.unregister(fifo)
             os.close(fifo)
 
-        self._write_trace()
+        self._coverage_writer.write(self._parser.line_data)
         with contextlib.suppress(FileNotFoundError):
             self.fifo_path.unlink()
-
-    def _write_trace(self) -> None:
-        suffix_ = "sh." + filename_suffix()
-        coverage_data = coverage.CoverageData(
-            # TODO: This probably wont work with pytest-cov
-            basename=self._coverage_data_path,
-            suffix=suffix_,
-            # TODO: set warn, debug and no_disk
-        )
-
-        coverage_data.add_file_tracers(
-            {f: "coverage_sh.ShellPlugin" for f in self._parser.line_data}
-        )
-        coverage_data.add_lines(self._parser.line_data)
-        coverage_data.write()
 
 
 OriginalPopen = subprocess.Popen
@@ -218,10 +229,12 @@ set -x
     return helper_path
 
 
-class PatchedPopen(OriginalPopen):
+# the proper way to do this would be using OriginalPopen[Any] but that is not supported by python 3.8, so we jusrt
+# ignore this for the time being
+class PatchedPopen(OriginalPopen):  # type: ignore[type-arg]
     data_file_path: Path = Path.cwd()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         if coverage.Coverage.current() is None:
             # we are not recording coverage, so just act like the original Popen
             self._parser_thread = None
@@ -233,7 +246,8 @@ class PatchedPopen(OriginalPopen):
         kwargs.update(dict(zip(sig.parameters.keys(), args)))
 
         self._parser_thread = CoverageParserThread(
-            coverage_data_path=self.data_file_path, name="CoverageParserThread(None)"
+            coverage_writer=CoverageWriter(coverage_data_path=self.data_file_path),
+            name="CoverageParserThread(None)",
         )
         self._parser_thread.start()
 
@@ -262,12 +276,11 @@ class PatchedPopen(OriginalPopen):
 class MonitorThread(threading.Thread):
     def __init__(
         self,
-        *args,
         parser_thread: CoverageParserThread,
         main_thread: threading.Thread | None = None,
-        **kwargs,
+        name: str | None = None,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(name=name)
         self._main_thread = main_thread or threading.main_thread()
         self.parser_thread = parser_thread
 
@@ -285,7 +298,7 @@ class ShellPlugin(CoveragePlugin):
         coverage_data_path = Path(coverage.Coverage().config.data_file).absolute()
         if self.options.get("cover_always", False):
             parser_thread = CoverageParserThread(
-                coverage_data_path=coverage_data_path,
+                coverage_writer=CoverageWriter(coverage_data_path),
                 name=f"CoverageParserThread({coverage_data_path!s})",
             )
             parser_thread.start()
@@ -299,17 +312,18 @@ class ShellPlugin(CoveragePlugin):
             os.environ["BASH_ENV"] = str(self._helper_path)
             os.environ["ENV"] = str(self._helper_path)
         else:
-            PatchedPopen.data_file_path: Path = coverage_data_path
-            subprocess.Popen = PatchedPopen
+            PatchedPopen.data_file_path = coverage_data_path
+            # https://github.com/python/mypy/issues/1152
+            subprocess.Popen = PatchedPopen  # type: ignore[misc]
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self._helper_path is not None:
             with contextlib.suppress(FileNotFoundError):
                 self._helper_path.unlink()
 
     @staticmethod
     def _is_relevant(path: Path) -> bool:
-        return magic.from_file(path, mime=True) in SUPPORTED_MIME_TYPES
+        return magic.from_file(path.resolve(), mime=True) in SUPPORTED_MIME_TYPES
 
     def file_tracer(self, filename: str) -> FileTracer | None:  # noqa: ARG002
         return None
@@ -326,7 +340,9 @@ class ShellPlugin(CoveragePlugin):
     ) -> Iterable[str]:
         for f in Path(src_dir).rglob("*"):
             # TODO: Use coverage's logic for figuring out if a file should be excluded
-            if not f.is_file() or any(p.startswith(".") for p in f.parts):
+            if not (f.is_file() or f.is_symlink()) or any(
+                p.startswith(".") for p in f.parts
+            ):
                 continue
 
             if self._is_relevant(f):
