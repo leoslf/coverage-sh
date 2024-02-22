@@ -229,7 +229,7 @@ set -x
     return helper_path
 
 
-class PatchedPopen(OriginalPopen):
+class PatchedPopen(OriginalPopen[Any]):
     data_file_path: Path = Path.cwd()
 
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -311,7 +311,8 @@ class ShellPlugin(CoveragePlugin):
             os.environ["ENV"] = str(self._helper_path)
         else:
             PatchedPopen.data_file_path = coverage_data_path
-            subprocess.Popen = PatchedPopen
+            # https://github.com/python/mypy/issues/1152
+            subprocess.Popen = PatchedPopen  # type: ignore[misc]
 
     def __del__(self) -> None:
         if self._helper_path is not None:
