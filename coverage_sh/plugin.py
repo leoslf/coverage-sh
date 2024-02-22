@@ -229,7 +229,9 @@ set -x
     return helper_path
 
 
-class PatchedPopen(OriginalPopen[Any]):
+# the proper way to do this would be using OriginalPopen[Any] but that is not supported by python 3.8, so we jusrt
+# ignore this for the time being
+class PatchedPopen(OriginalPopen):  # type: ignore[type-arg]
     data_file_path: Path = Path.cwd()
 
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
