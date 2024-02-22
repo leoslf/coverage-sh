@@ -32,9 +32,11 @@ jobs:
           rye sync --no-lock
       - name: Lint with ruff
         run: |
-          source .venv/bin/activate
-          ruff format --check .
+          rye run ruff format --check .
           rye run ruff check .
+      - name: Run mypy
+        run: |
+          rye run mypy coverage_sh
       - name: Test with pytest
         run: |
           rye run coverage run --parallel-mode -m pytest
