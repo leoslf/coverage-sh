@@ -290,6 +290,14 @@ class MonitorThread(threading.Thread):
         self.parser_thread.join()
 
 
+def _iterdir(path: Path) -> Iterator[Path]:
+    """Recursively iterate over path. Race-condition safe(r) alternative to Path.rglob("*")"""
+    for p in path.iterdir():
+        yield p
+        if p.is_dir():
+            yield from _iterdir(p)
+
+
 class ShellPlugin(CoveragePlugin):
     def __init__(self, options: dict[str, Any]):
         self.options = options
@@ -338,7 +346,7 @@ class ShellPlugin(CoveragePlugin):
         self,
         src_dir: str,
     ) -> Iterable[str]:
-        for f in Path(src_dir).rglob("*"):
+        for f in _iterdir(Path(src_dir)):
             # TODO: Use coverage's logic for figuring out if a file should be excluded
             if not (f.is_file() or f.is_symlink()) or any(
                 p.startswith(".") for p in f.parts
