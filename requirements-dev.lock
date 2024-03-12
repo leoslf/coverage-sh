@@ -28,7 +28,7 @@ ruff==0.3.2
 tomli==2.0.1
     # via mypy
     # via pytest
-tree-sitter==0.21.0
+tree-sitter==0.20.0
     # via tree-sitter-languages
 tree-sitter-languages==1.10.2
     # via coverage-sh
