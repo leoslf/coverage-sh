@@ -1,4 +1,5 @@
-name: release
+---
+name: Release
 
 on:
   push:
@@ -6,27 +7,24 @@ on:
   pull_request:
     branches: [ "main" ]
 
-permissions:
-  id-token: write
-
 jobs:
   release_to_pypi:
     name: Release to PyPI
     runs-on: ubuntu-latest
-    #    environment:
-    #      name: pypi
-    #      url: https://pypi.org/p/coverage-sh/
-
+    environment:
+      name: pypi
+      url: https://pypi.org/p/coverage-sh/
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: eifinger/setup-rye@v2
         with:
           enable-cache: true
-          version: '0.29.0'
-      - name: build
+      - name: Build
         run: |
-          rye build --wheel
-      - name: Upload package to Test PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+          rye build
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@81e9d935c883d0b210363ab89cf05f3894778450
         with:
           repository-url: https://test.pypi.org/legacy/
