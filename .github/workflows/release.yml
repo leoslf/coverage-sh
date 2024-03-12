@@ -1,11 +1,8 @@
----
-name: Release
+name: release
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  release:
+    types: [ published ]
 
 jobs:
   release_to_pypi:
@@ -21,10 +18,9 @@ jobs:
       - uses: eifinger/setup-rye@v2
         with:
           enable-cache: true
-      - name: Build
+          version: '0.19.0'
+      - name: build
         run: |
           rye build
       - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@81e9d935c883d0b210363ab89cf05f3894778450
-        with:
-          repository-url: https://test.pypi.org/legacy/
+        uses: pypa/gh-action-pypi-publish@release/v1
