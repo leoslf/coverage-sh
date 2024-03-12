@@ -8,11 +8,11 @@
 #   with-sources: false
 
 -e file:.
-coverage==7.4.3
+coverage==7.4.0
     # via coverage-sh
 python-magic==0.4.27
     # via coverage-sh
-tree-sitter==0.20.0
+tree-sitter==0.20.4
     # via tree-sitter-languages
-tree-sitter-languages==1.10.2
+tree-sitter-languages==1.9.1
     # via coverage-sh
