@@ -137,12 +137,16 @@ class CovLineParser:
 
 class CoverageWriter:
     def __init__(self, coverage_data_path: Path):
+        # pytest-cov uses the COV_CORE_DATAFILE env var to configure the datafile base path
+        coverage_data_env_var = os.environ.get("COV_CORE_DATAFILE")
+        if coverage_data_env_var is not None:
+            coverage_data_path = Path(coverage_data_env_var).absolute()
+
         self._coverage_data_path = coverage_data_path
 
     def write(self, line_data: LineData) -> None:
         suffix_ = "sh." + filename_suffix()
         coverage_data = coverage.CoverageData(
-            # TODO: This probably wont work with pytest-cov
             basename=self._coverage_data_path,
             suffix=suffix_,
             # TODO: set warn, debug and no_disk
@@ -304,6 +308,7 @@ class ShellPlugin(CoveragePlugin):
         self._helper_path = None
 
         coverage_data_path = Path(coverage.Coverage().config.data_file).absolute()
+
         if self.options.get("cover_always", False):
             parser_thread = CoverageParserThread(
                 coverage_writer=CoverageWriter(coverage_data_path),
