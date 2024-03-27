@@ -325,6 +325,24 @@ class TestCoverageWriter:
         for filename, lines in COVERAGE_LINE_COVERAGE.items():
             assert cov_db.lines(filename) == sorted(lines)
 
+    def test_writer_should_prefer_pytest_cov_env_vars(
+        self, dummy_project_dir, tmp_path, monkeypatch
+    ):
+        pytest_cov_path = tmp_path / "coverage"
+        monkeypatch.setenv("COV_CORE_DATAFILE", str(pytest_cov_path))
+
+        data_file_path = dummy_project_dir.joinpath("coverage-data.db")
+        writer = CoverageWriter(data_file_path)
+        writer.write(COVERAGE_LINE_COVERAGE)
+
+        assert list(data_file_path.parent.glob(data_file_path.stem + "*")) == []
+
+        concrete_pytest_cov_path = next(
+            pytest_cov_path.parent.glob(pytest_cov_path.stem + "*")
+        )
+
+        assert concrete_pytest_cov_path.is_file()
+
 
 class TestPatchedPopen:
     @pytest.mark.parametrize("is_recording", [(True), (False)])
