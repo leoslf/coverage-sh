@@ -69,7 +69,12 @@ class ShellFileReporter(FileReporter):
 
     def source(self) -> str:
         if self._content is None:
-            self._content = self.path.read_text()
+            if not self.path.is_file():
+                return ""
+            try:
+                self._content = self.path.read_text()
+            except UnicodeDecodeError:
+                return ""
 
         return self._content
 

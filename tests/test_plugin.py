@@ -224,6 +224,22 @@ class TestShellFileReporter:
         reporter = ShellFileReporter(str(resources_dir / "invalid_syntax.sh"))
         assert reporter.lines() == {9, 12, 15, 18}
 
+    def test_handle_missing_file(self, tmp_path):
+        reporter = ShellFileReporter(str(tmp_path / "missing_file.sh"))
+        assert reporter.lines() == set()
+
+    def test_handle_binary_file(self, tmp_path):
+        file_path = tmp_path / "missing_file.sh"
+        file_path.write_bytes(bytes.fromhex("348765F32190"))
+        reporter = ShellFileReporter(str(file_path))
+        assert reporter.lines() == set()
+
+    def test_handle_non_file(self, tmp_path):
+        file_path = tmp_path / "missing_file.sh"
+        file_path.mkdir()
+        reporter = ShellFileReporter(str(file_path))
+        assert reporter.lines() == set()
+
 
 def test_filename_suffix_should_match_pattern():
     suffix = filename_suffix()
