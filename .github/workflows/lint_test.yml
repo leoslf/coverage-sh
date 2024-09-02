@@ -21,10 +21,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: eifinger/setup-rye@v2
+      - uses: eifinger/setup-rye@v4
         with:
           enable-cache: true
-          version: '0.29.0'
+          version: '0.39.0'
       - name: "Pin python-version ${{ matrix.python-version }}"
         run: rye pin ${{ matrix.python-version }}
       - name: Install dependencies
@@ -40,12 +40,14 @@ jobs:
       - name: Test with pytest
         run: |
           rye run coverage run --parallel-mode -m pytest
+          ls -lah
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
           name: coverage-data-${{ matrix.python-version }}
           path: .coverage.*
-          if-no-files-found: ignore
+          if-no-files-found: error
+          include-hidden-files: true
 
 
   coverage:
@@ -70,7 +72,7 @@ jobs:
         run: |
           python -Im pip install coverage[toml]
           
-          rm .coverage.sh.*
+          rm -f .coverage.sh.*
           python -Im coverage combine
           python -Im coverage html --skip-covered --skip-empty
           python -Im coverage json
