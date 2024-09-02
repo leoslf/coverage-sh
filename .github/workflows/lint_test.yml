@@ -40,6 +40,7 @@ jobs:
       - name: Test with pytest
         run: |
           rye run coverage run --parallel-mode -m pytest
+          ls -lah
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
