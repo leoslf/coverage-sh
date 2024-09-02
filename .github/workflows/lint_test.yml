@@ -70,7 +70,7 @@ jobs:
         run: |
           python -Im pip install coverage[toml]
           
-          rm .coverage.sh.*
+          rm -f .coverage.sh.*
           python -Im coverage combine
           python -Im coverage html --skip-covered --skip-empty
           python -Im coverage json
