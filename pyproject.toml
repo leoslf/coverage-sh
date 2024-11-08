@@ -1,13 +1,14 @@
 [project]
 name = "coverage-sh"
-version = "0.4.5    "
+version = "0.5.0"
 description = "A  Coverage.py plugin to measure code coverage of shell scripts from python."
 authors = [
     { name = "Kilian Lackhove", email = "kilian@lackhove.de" }
 ]
 dependencies = [
-    "coverage>=7.3.3",
+    "coverage[toml]>=7.3.3",
     "python-magic>=0.4.27",
+    "tree-sitter<0.22",
     "tree-sitter-languages>=1.8.0",
 ]
 readme = "README.md"
@@ -25,6 +26,16 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff==0.3.2",
+    "mypy>=1.9.0",
+    "pytest>=7.4.3",
+    "setuptools>=69.0.2",
+    "types-tree-sitter-languages>=1.10.0.20240201",
+    "coverage-conditional-plugin>=0.9.0,<0.10.0",
+]
+
 [project.urls]
 homepage = "https://github.com/lackhove/coverage-sh"
 
@@ -34,13 +45,6 @@ build-backend = "hatchling.build"
 
 [tool.rye]
 managed = true
-dev-dependencies = [
-    "ruff==0.3.2",
-    "mypy>=1.9.0",
-    "pytest>=7.4.3",
-    "setuptools>=69.0.2",
-    "types-tree-sitter-languages>=1.10.0.20240201",
-]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -86,13 +90,39 @@ ignore = [
 [tool.mypy]
 strict = true
 
+[tool.pytest.ini_options]
+log_level = "INFO"
+log_format = "%(asctime)s [%(threadName)s] [%(levelname)-s] [%(name)s] (%(filename)s:%(funcName)s:%(lineno)d) %(message)s"
+log_date_format = "%Y-%m-%dT%H:%M:%S%z"
+addopts = [
+    "--log-disable=coverage_sh.plugin.coverage_trace",
+    "--log-disable=coverage_sh.plugin.parser",
+]
+filterwarnings = [
+    "ignore:Already imported a file that will be measured.*(coverage_sh/plugin.py|tests/.*) \\(already-imported\\):coverage.exceptions.CoverageWarning",
+]
+
 [tool.coverage.run]
+relative_files = true
 branch = true
-include = ["coverage_sh/**", "tests/**"]
+source = ["coverage_sh", "tests"]
+source_pkgs = ["coverage_sh"]
 omit = ["coverage_sh/__init__.py"]
+plugins = ["coverage_conditional_plugin"]
+
+[tool.coverage.paths]
+source = ["coverage_sh/", "**/site-packages/coverage_sh/"]
 
 [tool.coverage.report]
-
 exclude_also = [
+    "pragma: false negative",
     "if TYPE_CHECKING:",
+    "if __name__ == [\"']__main__[\"']:",
 ]
+
+[tool.coverage.coverage_conditional_plugin.rules]
+no-cover-if-python-gte-39 = "sys_version_info >= (3, 9)"
+no-cover-if-python-lt-39 = "sys_version_info < (3, 9)"
+no-cover-if-python-gte-310 = "sys_version_info >= (3, 10)"
+no-cover-if-python-lt-310 = "sys_version_info < (3, 10)"
+

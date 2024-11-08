@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: MIT
 #  Copyright (c) 2023 Kilian Lackhove
+# mypy: disable-error-code="no-untyped-def"
 
 import shutil
 from pathlib import Path

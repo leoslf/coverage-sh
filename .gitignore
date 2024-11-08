@@ -12,3 +12,9 @@ wheels/
 
 # venv
 .venv
+
+# coverage
+.coverage*
+!.coveragerc
+
+.DS_Store
