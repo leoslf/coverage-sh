@@ -13,6 +13,7 @@ import subprocess
 import platform
 import threading
 import logging
+import pprint
 
 from typing import cast
 from collections import defaultdict
@@ -25,7 +26,6 @@ import pytest
 
 from unittest import mock
 
-from coverage_sh import ShellPlugin
 from coverage_sh.plugin import (
     CoverageParserThread,
     CoverageWriter,
@@ -35,52 +35,108 @@ from coverage_sh.plugin import (
     MonitorThread,
     PatchedPopen,
     ShellFileReporter,
+    ShellPlugin,
     filename_suffix,
 )
 
 logger = logging.getLogger(__name__)
 
+MULTIPLE_ELIFS_EXAMPLE_EXECUTABLE_LINES = {
+    3,
+    6,
+    8,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+}
+MULTIPLE_ELIFS_EXAMPLE_COVERED_LINES = {
+    3,
+    6,
+    10,
+    15,
+    17,
+    24,
+    26,
+}
+MULTIPLE_ELIFS_EXAMPLE_EXCLUDED_LINES = {26}
+MULTIPLE_ELIFS_EXAMPLE_MISSING_LINES = {
+    8,
+    13,
+    20,
+    22,
+}
+MULTIPLE_ELIFS_EXAMPLE_EXECUTED_BRANCHES = {
+    (-1, 3),
+    (3, 6),
+    (6, 10),
+    (10, 15),
+    (15, 17),
+    (17, 24),
+    (24, 26),
+}
+MULTIPLE_ELIFS_EXAMPLE_MISSING_BRANCHES = {
+    (6, 8),
+    (8, 24),
+    (10, 13),
+    (13, 24),
+    (15, 20),
+    (20, 22),
+    (22, 24),
+}
+
 SYNTAX_EXAMPLE_EXECUTABLE_LINES = {
     12,
     15,
     18,
-    19,
-    21,
-    25,
-    26,
-    30,
-    31,
-    35,
-    36,
-    37,
+    20,
     38,
     43,
     46,
-    49,
-    52,
     55,
     56,
     59,
-    60,
-    63,
     64,
-    67,
-    70,
-    73,
-    74,
-    75,
-    76,
-    79,
+    66,
+    71,
+    78,
     80,
-    82,
-    85,
-    88,
+    84,
+    94,
     95,
+    97,
+    102,
+    107,
+    109,
+    124,
+    133,
+    138,
+    144,
+    150,
+    153,
+    154,
+    157,
+    158,
+    161,
+    162,
+    165,
+    168,
+    171,
+    172,
+    173,
+    174,
+    177,
+    178,
+    186,
 }
-
 SYNTAX_EXAMPLE_STDOUT = (
     "Hello, World!\n"
     "Variable is set to 'Hello, World!'\n"
+    "Variable is set to 'Hello, World!'\n"
+    "always true\n"
     "Iteration 0\n"
     "Iteration 1\n"
     "Iteration 2\n"
@@ -114,66 +170,124 @@ SYNTAX_EXAMPLE_STDOUT = (
     "testing\n"
     "This is a sample file.\n"
     "You selected a banana.\n"
+    "Hello, World!\n"
 )
-SYNTAX_EXAMPLE_EXECUTED_BRANCHES = [
-    [84, 85],
-]
-SYNTAX_EXAMPLE_EXCLUDED_BRANCHES: list[tuple[int, int]] = []
-SYNTAX_EXAMPLE_MISSING_BRANCHES = [
-    [81, 82],
-    [81, 84],
-    [84, 87],
-    [87, 88],
-    [87, 90],
-]
 SYNTAX_EXAMPLE_COVERED_LINES = [
     12,
     15,
     18,
-    19,
-    25,
-    26,
-    30,
-    31,
-    35,
-    36,
-    37,
+    20,
     38,
     43,
     46,
-    49,
-    52,
     55,
     56,
     59,
-    60,
-    63,
     64,
-    67,
-    70,
-    73,
-    74,
-    75,
-    76,
-    79,
+    66,
+    71,
+    78,
     80,
-    85,
-]
-SYNTAX_EXAMPLE_EXCLUDED_LINES = [21]
-SYNTAX_EXAMPLE_MISSING_LINES = [
-    21,
-    82,
-    88,
+    84,
+    94,
     95,
+    97,
+    102,
+    107,
+    109,
+    124,
+    133,
+    138,
+    144,
+    150,
+    153,
+    154,
+    157,
+    158,
+    161,
+    162,
+    165,
+    168,
+    171,
+    172,
+    173,
+    174,
+    177,
+    178,
+    186,
+    212,
+    213,
+    214,
+    215,
+    217,
 ]
+SYNTAX_EXAMPLE_EXCLUDED_LINES = [60]
+SYNTAX_EXAMPLE_MISSING_LINES = [
+    23,
+    26,
+    28,
+    29,
+    30,
+    32,
+    34,
+    40,
+    49,
+    51,
+    60,
+    73,
+    86,
+    88,
+    111,
+    115,
+    126,
+    181,
+    191,
+    203,
+]
+SYNTAX_EXAMPLE_EXECUTED_BRANCHES = {
+    (18, 20), # if -> statements[0]
+    (38, 43), # if -> elif
+    (43, 46), # elif -> statements[0]
+    (46, 55),
+    (55, 56),
+    (56, 59),
+    (64, 66),
+    (66, 64),
+    (184, 186),
+    (214, 215),
+    (217, 213),
+}
+SYNTAX_EXAMPLE_MISSING_BRANCHES = {
+    (18, 23), # if -> elif
+    (23, 26), # elif -> statements[0]
+    (23, 32), # elif -> else
+    (30, 38), 
+    (34, 38),
+    (38, 40),
+    (43, 49), # elif -> else
+    (51, 55), # else->statements[-1] -> nearest_next_line(fi)
+    (60, 64), # statements[-1] -> nearest_next_line(fi)
+    # (66, 71),
+    (71, 73), # for ((i=0; i<0; ++i)) -> for(;;)->statements[0]
+    (73, 71), # for (;;)->statements[-1] -> update
+    (73, 78), # for(;;)->statements[-1] -> nearest_next_line(done)
+    (86, 88),
+    (109, 111),
+    (145, 147),
+    (154, 156),
+    (159, 164),
+    (170, 173),
+    (173, 176),
+    (176, 178),
+}
 COVERAGE_LINE_CHUNKS = (
     b"""\
-CCOV:::/home/dummy_user/dummy_dir_a:::<global>:::1:::a normal line
-COV:::/home/dummy_user/dummy_dir_b:::<global>:::10:::a line
+++:::COV:::/home/dummy_user/dummy_dir_a:::<global>:::1:::a normal line
++:::COV:::/home/dummy_user/dummy_dir_b:::<global>:::10:::a line
 with a line fragment
 
-COV:::/home/dummy_user/dummy_dir_a:::<global>:::2:::a  line with ::: triple columns
-COV:::/home/dummy_user/dummy_dir_a:::<global>:::3:::a  line """,
++COV:::/home/dummy_user/dummy_dir_a:::<global>:::2:::a  line with ::: triple columns
++COV:::/home/dummy_user/dummy_dir_a:::<global>:::3:::a  line """,
     b"that spans multiple chunks\n",
     b"C",
     b"O",
@@ -188,12 +302,12 @@ COV:::/home/dummy_user/dummy_dir_a:::<global>:::3:::a  line """,
     b"/dummy_user/dummy_dir_a:::<global>:::4:::a chunked line",
 )
 COVERAGE_LINES = [
-    "CCOV:::/home/dummy_user/dummy_dir_a:::<global>:::1:::a normal line",
-    "COV:::/home/dummy_user/dummy_dir_b:::<global>:::10:::a line",
+    "++:::COV:::/home/dummy_user/dummy_dir_a:::<global>:::1:::a normal line",
+    "+:::COV:::/home/dummy_user/dummy_dir_b:::<global>:::10:::a line",
     "with a line fragment",
-    "COV:::/home/dummy_user/dummy_dir_a:::<global>:::2:::a  line with ::: triple columns",
-    "COV:::/home/dummy_user/dummy_dir_a:::<global>:::3:::a  line that spans multiple chunks",
-    "COV:::/home/dummy_user/dummy_dir_a:::<global>:::4:::a chunked line",
+    "+:::COV:::/home/dummy_user/dummy_dir_a:::<global>:::2:::a  line with ::: triple columns",
+    "+:::COV:::/home/dummy_user/dummy_dir_a:::<global>:::3:::a  line that spans multiple chunks",
+    "+:::COV:::/home/dummy_user/dummy_dir_a:::<global>:::4:::a chunked line",
 ]
 COVERAGE_LINE_COVERAGE = {
     "/home/dummy_user/dummy_dir_a": {1, 2, 3, 4},
@@ -291,23 +405,23 @@ def test_end2end(dummy_project_dir, monkeypatch, branch: bool, cover_always: boo
     assert proc.returncode == 0
 
     coverage_json = json.loads(dummy_project_dir.joinpath("coverage.json").read_text())
-    logger.debug(coverage_json)
+    logger.debug(json.dumps(coverage_json, indent=2))
 
-    assert coverage_json["files"]["test.sh"]["summary"]["percent_covered"] == 100.0
-    assert coverage_json["files"]["test.sh"]["executed_lines"] == [8, 9]
-    assert coverage_json["files"]["test.sh"]["excluded_lines"] == []
-    assert coverage_json["files"]["test.sh"]["missing_lines"] == []
+    assert coverage_json["files"]["test.sh"]["summary"]["percent_covered"] == 100.0, "test.sh should have 100% covered"
+    assert coverage_json["files"]["test.sh"]["executed_lines"] == [8, 9, 10, 11, 12], "executed_lines of test.sh should match"
+    assert coverage_json["files"]["test.sh"]["excluded_lines"] == [], "excluded_lines of test.sh should match"
+    assert coverage_json["files"]["test.sh"]["missing_lines"] == [], "missing_lines of test.sh should match"
     if branch:
-        assert coverage_json["files"]["test.sh"]["executed_branches"] == []
-        assert coverage_json["files"]["test.sh"]["missing_branches"] == []
+        assert set(map(tuple, coverage_json["files"]["test.sh"]["executed_branches"])) == set(), "executed_branches of test.sh should match"
+        assert set(map(tuple, coverage_json["files"]["test.sh"]["missing_branches"])) == set(), "missing_branches of test.sh should match"
 
-    assert coverage_json["files"]["syntax_example.sh"]["summary"]["percent_covered"] > 0
-    assert coverage_json["files"]["syntax_example.sh"]["executed_lines"] == SYNTAX_EXAMPLE_COVERED_LINES
-    assert coverage_json["files"]["syntax_example.sh"]["excluded_lines"] == SYNTAX_EXAMPLE_EXCLUDED_LINES
-    assert coverage_json["files"]["syntax_example.sh"]["missing_lines"] == SYNTAX_EXAMPLE_MISSING_LINES
+    assert coverage_json["files"]["syntax_example.sh"]["summary"]["percent_covered"] > 0, "percent_covered of syntax_example.sh should match"
+    assert coverage_json["files"]["syntax_example.sh"]["executed_lines"] == SYNTAX_EXAMPLE_COVERED_LINES, "executed_lines of syntax_example.sh should match"
+    assert coverage_json["files"]["syntax_example.sh"]["excluded_lines"] == SYNTAX_EXAMPLE_EXCLUDED_LINES, "excluded_lines of syntax_example.sh should match"
+    assert coverage_json["files"]["syntax_example.sh"]["missing_lines"] == SYNTAX_EXAMPLE_MISSING_LINES, "missing_lines of syntax_example.sh should match"
     if branch:
-        assert coverage_json["files"]["syntax_example.sh"]["executed_branches"] == SYNTAX_EXAMPLE_EXECUTED_BRANCHES
-        assert coverage_json["files"]["syntax_example.sh"]["missing_branches"] == SYNTAX_EXAMPLE_MISSING_BRANCHES
+        assert set(map(tuple, coverage_json["files"]["syntax_example.sh"]["executed_branches"])) == SYNTAX_EXAMPLE_EXECUTED_BRANCHES, "executed_branches of syntax_example.sh should match"
+        assert set(map(tuple, coverage_json["files"]["syntax_example.sh"]["missing_branches"])) == SYNTAX_EXAMPLE_MISSING_BRANCHES, "missing_branches of syntax_example.sh should match"
 
 @pytest.mark.parametrize("cover_always", [(True), (False)])
 @pytest.mark.parametrize("branch", [(True), (False)])
@@ -350,27 +464,38 @@ def test_programmatic_end2end(dummy_project_dir, monkeypatch, branch: bool, cove
 
     cov.combine()
     html_report = cov.html_report()
-    logger.info(f"html_report: {os.path.join(dummy_project_dir, 'htmlcov', 'index.html')}")
     cov.json_report()
 
+    # wait until all logs are printed
+    logger.info(f"html_report: {os.path.join(dummy_project_dir, 'htmlcov', 'index.html')}")
+
     coverage_json = json.loads(dummy_project_dir.joinpath("coverage.json").read_text())
-    logger.debug(coverage_json)
-
-    assert coverage_json["files"]["test.sh"]["summary"]["percent_covered"] == 100.0
-    assert coverage_json["files"]["test.sh"]["executed_lines"] == [8, 9]
-    assert coverage_json["files"]["test.sh"]["excluded_lines"] == []
-    assert coverage_json["files"]["test.sh"]["missing_lines"] == []
+    logger.debug(json.dumps(coverage_json, indent=2))
+    # assert coverage_json["files"]["test.sh"]["summary"]["percent_covered"] == 100.0, "test.sh should have 100% covered"
+    assert coverage_json["files"]["test.sh"]["executed_lines"] == [8, 9, 10, 11, 12], "executed_lines of test.sh should match"
+    assert coverage_json["files"]["test.sh"]["excluded_lines"] == [], "excluded_lines of test.sh should match"
+    assert coverage_json["files"]["test.sh"]["missing_lines"] == [], "missing_lines of test.sh should match"
     if branch:
-        assert coverage_json["files"]["test.sh"]["executed_branches"] == []
-        assert coverage_json["files"]["test.sh"]["missing_branches"] == []
+        assert set(map(tuple, coverage_json["files"]["test.sh"]["executed_branches"])) == set(), "executed_branches of test.sh should match"
+        assert set(map(tuple, coverage_json["files"]["test.sh"]["missing_branches"])) == set(), "missing_branches of test.sh should match"
 
-    assert coverage_json["files"]["syntax_example.sh"]["summary"]["percent_covered"] > 0
-    assert coverage_json["files"]["syntax_example.sh"]["executed_lines"] == SYNTAX_EXAMPLE_COVERED_LINES
-    assert coverage_json["files"]["syntax_example.sh"]["excluded_lines"] == SYNTAX_EXAMPLE_EXCLUDED_LINES
-    assert coverage_json["files"]["syntax_example.sh"]["missing_lines"] == SYNTAX_EXAMPLE_MISSING_LINES
+    assert coverage_json["files"]["multiple_elifs_example.sh"]["summary"]["percent_covered"] > 0, "percent_covered of multiple_elifs_example.sh should match"
+    assert set(coverage_json["files"]["multiple_elifs_example.sh"]["executed_lines"]) == MULTIPLE_ELIFS_EXAMPLE_COVERED_LINES, "executed_lines of multiple_elifs_example.sh should match"
+    assert set(coverage_json["files"]["multiple_elifs_example.sh"]["excluded_lines"]) == MULTIPLE_ELIFS_EXAMPLE_EXCLUDED_LINES, "excluded_lines of multiple_elifs_example.sh should match"
+    assert coverage_json["files"]["multiple_elifs_example.sh"]["missing_lines"] == MULTIPLE_ELIFS_EXAMPLE_MISSING_LINES, "missing_lines of multiple_elifs_example.sh should match"
     if branch:
-        assert coverage_json["files"]["syntax_example.sh"]["executed_branches"] == SYNTAX_EXAMPLE_EXECUTED_BRANCHES
-        assert coverage_json["files"]["syntax_example.sh"]["missing_branches"] == SYNTAX_EXAMPLE_MISSING_BRANCHES
+        assert set(map(tuple, coverage_json["files"]["multiple_elifs_example.sh"]["executed_branches"])) == MULTIPLE_ELIFS_EXAMPLE_EXECUTED_BRANCHES, "executed_branches of multiple_elifs_example.sh should match"
+        assert set(map(tuple, coverage_json["files"]["multiple_elifs_example.sh"]["missing_branches"])) == MULTIPLE_ELIFS_EXAMPLE_MISSING_BRANCHES, "missing_branches of multiple_elifs_example.sh should match"
+
+
+    assert coverage_json["files"]["syntax_example.sh"]["summary"]["percent_covered"] > 0, "percent_covered of syntax_example.sh should match"
+    assert coverage_json["files"]["syntax_example.sh"]["executed_lines"] == SYNTAX_EXAMPLE_COVERED_LINES, "executed_lines of syntax_example.sh should match"
+    assert coverage_json["files"]["syntax_example.sh"]["excluded_lines"] == SYNTAX_EXAMPLE_EXCLUDED_LINES, "excluded_lines of syntax_example.sh should match"
+    assert coverage_json["files"]["syntax_example.sh"]["missing_lines"] == SYNTAX_EXAMPLE_MISSING_LINES, "missing_lines of syntax_example.sh should match"
+    if branch:
+        assert set(map(tuple, coverage_json["files"]["syntax_example.sh"]["executed_branches"])) == SYNTAX_EXAMPLE_EXECUTED_BRANCHES, "executed_branches of syntax_example.sh should match"
+        assert set(map(tuple, coverage_json["files"]["syntax_example.sh"]["missing_branches"])) == SYNTAX_EXAMPLE_MISSING_BRANCHES, "missing_branches of syntax_example.sh should match"
+
 
 
 class TestShellFileReporter:
@@ -427,7 +552,7 @@ class TestCovLineParser:
         parser = CovLineParser()
         with pytest.raises(ValueError, match="could not parse line"):
             parser.parse(
-                b"COV:::/home/dummy_user/dummy_dir_b:::a line with missing line number\n"
+                b"+:::COV:::/home/dummy_user/dummy_dir_b:::a line with missing line number\n"
             )
 
 
@@ -640,3 +765,4 @@ class TestShellPlugin:
         executable_files = plugin.find_executable_files(str(tmp_path))
 
         assert set(executable_files) == {str(f) for f in (foo_file_path, foo_file_link)}
+

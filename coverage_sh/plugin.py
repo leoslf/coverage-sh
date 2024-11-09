@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import sys
 import os
+import ctypes
 import re
 import io
 import logging
@@ -28,12 +29,8 @@ from random import Random
 from socket import gethostname
 from time import sleep
 
-import coverage
 import magic
-from coverage import CoveragePlugin, FileReporter, FileTracer
-from tree_sitter_languages import get_parser
-
-from tree_sitter import Parser, Node
+import coverage
 from coverage.types import TConfigurable, TArc, TLineNo
 
 if sys.version_info < (3, 9): # pragma: no-cover-if-python-gte-39
@@ -47,257 +44,15 @@ else: # pragma: no-cover-if-python-lt-39
     ArcData = dict[str, list[TArc]]
     PreviousLineData = dict[str, TLineNo]
 
-if sys.version_info < (3, 10): # pragma: no-cover-if-python-gte-310
-    T = TypeVar("T")
-    def pairwise(iterable: Iterable[T]) -> Iterable[tuple[T, T]]:
-        a, b = itertools.tee(iterable)
-        next(b, None)
-        return zip(a, b)
-else: # pragma: no-cover-if-python-lt-310
-    from itertools import pairwise
+from coverage_sh.parsers import ShellFileParser
 
 TMP_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))  # noqa: S108
 TRACEFILE_PREFIX = "shelltrace"
-EXECUTABLE_NODE_TYPES = {
-    "subshell",
-    "redirected_statement",
-    "variable_assignment",
-    "variable_assignments",
-    "command",
-    "declaration_command",
-    "unset_command",
-    "test_command",
-    "negated_command",
-    "for_statement",
-    "c_style_for_statement",
-    "while_statement",
-    "if_statement",
-    "case_statement",
-    "pipeline",
-    "list",
-}
 SUPPORTED_MIME_TYPES = {"text/x-shellscript"}
 
 logger = logging.getLogger(__name__)
 
-class ShellFileParser:
-    filename: str
-    source: str
-    exclude: str | None
-
-    _parser: Parser = get_parser("bash")
-
-    @functools.cached_property
-    def logger(self) -> logging.Logger:
-        return logger.getChild("parser")
-
-    def __init__(self, filename: str, source: str, exclude: str | None = None):
-        self.filename = filename
-        self.source = source
-        self.exclude = exclude
-        self._tree = self._parser.parse(source.encode("utf-8"))
-        self.arc_translations: dict[TArc, set[TArc]] = {}
-
-    @functools.cached_property
-    def lines(self) -> set[TLineNo]:
-        executable_lines: set[TLineNo] = set()
-
-        def parse_ast(node: Node) -> None:
-            if node.is_named and node.type in EXECUTABLE_NODE_TYPES:
-                executable_lines.add(node.start_point[0] + 1)
-
-            for child in node.children:
-                parse_ast(child)
-
-        parse_ast(self._tree.root_node)
-        self.logger.debug(f"[{self.filename}] lines: {executable_lines}")
-        return executable_lines
-
-    @functools.cached_property
-    def excluded_lines(self) -> set[TLineNo]:
-        excluded_lines: set[TLineNo] = set()
-
-        for lineno, line in enumerate(self.source.split("\n"), 1):
-            if self.exclude is not None and re.search(self.exclude, line):
-                excluded_lines.add(lineno)
-
-        return excluded_lines
-
-    @property
-    def bash_supports_case_item_trace(self) -> bool:
-        # NOTE: bash's trace does not support showing case_items as of 5.2
-        return False
-
-    @property
-    def bash_supports_case_item_termination_trace(self) -> bool:
-        # NOTE: bash's trace does not support showing case_items as of 5.2
-        return False
-
-    def nearest_next_line(self, target: int) -> int:
-        return next((lineno for lineno in self.lines if lineno >= target), -1)
-
-    @functools.cached_property
-    def arcs(self) -> list[TArc]:
-        arcs: list[TArc] = list()
-
-        def of(*types: str, match: Literal["all", "any"] = "any") -> Callable[[Node], bool]:
-            return lambda node: {"all": all, "any": any}[match](fnmatch.fnmatch(node.type, type) for type in types)
-
-        is_statement = of(*EXECUTABLE_NODE_TYPES)
-
-        def not_of(*types: str, match: Literal["all", "any"] = "any") -> Callable[[Node], bool]:
-            negations: dict[Literal["all", "any"], Literal["all", "any"]] = {"all": "any", "any": "all"}
-            return lambda node: not of(*types, match=negations[match])(node)
-
-        def parse_ast(node: Node) -> None:
-            if node.type == "if_statement":
-                self.logger.debug(f"if_statement: {node!r}")
-                conditions = list(filter(of("command", "*_command", "compound_statement"), node.children_by_field_name("condition")))
-                assert conditions, f"conditions are required as per the grammar: {node.children_by_field_name('condition')!r}"
-                self.logger.debug(f"conditions: {conditions}")
-
-                elif_clauses = list(filter(of("elif_clause"), node.children))
-                self.logger.debug(f"elif_clauses: {elif_clauses}")
-                else_clauses = list(filter(of("else_clause"), node.children))
-                assert len(else_clauses) <= 1
-                self.logger.debug(f"else_clauses: {else_clauses}")
-                for clause, statements in { node: list(filter(not_of("*_clause"), node.children)), **{elif_clause: elif_clause.children for elif_clause in elif_clauses }}.items():
-                    self.logger.debug(f"statements: {statements}")
-                    arcs.append((clause.start_point[0] + 1, statements[0].start_point[0] + 1))
-                    arcs.append((statements[-1].end_point[1] + 1, node.end_point[1] + 1))
-                for source, destination in pairwise([node] + elif_clauses + else_clauses):
-                    arcs.append((source.start_point[0] + 1, self.nearest_next_line(destination.start_point[0] + 1)))
-
-            elif node.type == "c_style_for_statement":
-                self.logger.debug(f"c_style_for_statement: {node!r}")
-                body = node.child_by_field_name("body")
-                self.logger.debug(f"body: {body}")
-                conditions = node.children_by_field_name("condition")
-                self.logger.debug(f"conditions: {conditions}")
-                assert conditions, "conditions are required as per the grammar"
-                # TODO
-
-            elif node.type == "for_statement":
-                self.logger.debug(f"for_statement: {node!r}")
-                body = node.child_by_field_name("body")
-                self.logger.debug(f"body: {body}")
-                variable = node.child_by_field_name("variable")
-                self.logger.debug(f"variable: {variable}")
-                values = node.children_by_field_name("value")
-                self.logger.debug(f"values: {values}")
-                # TODO
-
-            elif node.type == "while_statement":
-                self.logger.debug(f"while_statement: {node!r}")
-                body = node.child_by_field_name("body")
-                self.logger.debug(f"body: {body}")
-                conditions = node.children_by_field_name("condition")
-                assert conditions, "conditions are required as per the grammar"
-                self.logger.debug(f"conditions: {conditions}")
-                # TODO
-
-            elif node.type == "case_statement":
-                self.logger.debug(f"case_statement: {node!r}")
-                value = node.child_by_field_name("value")
-                self.logger.debug(f"value: {value}")
-                case_items = list(filter(of("case_item"), node.children))
-                self.logger.debug(f"case_items: {case_items}")
-
-                # TODO: find a way to be more precise on the branches for each condition in  each case_item
-
-                # only bridge from case_statement to the first case_item
-                arcs.append((node.start_point[0] + 1, case_items[0].start_point[0] + 1))
-
-                for case_item in case_items:
-                    if statements := list(filter(is_statement, case_item.children)):
-                        # matched
-                        arcs.append((case_item.start_point[0] + 1, statements[0].start_point[0] + 1))
-
-                        if not self.bash_supports_case_item_trace: # pragma: no branch
-                            # matched
-                            self.arc_translations[(node.start_point[0] + 1, statements[0].start_point[0] + 1)] = {
-                                # case_statement.start_point -> case_item
-                                (node.start_point[0] + 1, case_item.start_point[0] + 1),
-                                # case_item -> statements[0]
-                                (case_item.start_point[0] + 1, statements[0].start_point[0] + 1),
-                            }
-
-                        # termination
-                        if termination := case_item.child_by_field_name("termination"):
-                            arcs.append((termination.end_point[0] + 1, self.nearest_next_line(node.end_point[0] + 1)))
-                            if not self.bash_supports_case_item_termination_trace: # pragma: no branch
-                                self.arc_translations[(statements[-1].end_point[0] + 1, self.nearest_next_line(node.end_point[0] + 1))] = {
-                                    # statements[-1] -> case_statement.end_point
-                                    (statements[-1].start_point[0] + 1, node.end_point[0] + 1),
-                                    (node.end_point[0] + 1, self.nearest_next_line(node.end_point[0] + 1)),
-                                }
-
-                for source, destination in pairwise(case_items):
-                    self.logger.debug(f"source: {source}, source.children: {source.children}")
-                    # TODO: consider dropping unilt ) and taking while not
-                    if statements := list(filter(is_statement, source.children)):
-                        self.logger.debug(f"statements: {statements}")
-                        # mismatch
-                        arcs.append((source.start_point[0] + 1, destination.start_point[0] + 1))
-
-                    # fallthrough
-                    if fallthrough := source.child_by_field_name("fallthrough"):
-                        arcs.append((fallthrough.end_point[0] + 1, destination.start_point[0] + 1))
-
-
-                    assert fallthrough or source.child_by_field_name("termination"), f"case_item: {source!r} should have either fallthrough or termination"
-            elif node.type == "negated_command":
-                self.logger.debug(f"negated_command: {node!r}")
-                _, child = node.children
-                self.logger.debug(f"child: {child}")
-                arcs.append((node.start_point[0] + 1, child.start_point[0] + 1))
-
-            elif node.type == "ternary_expression":
-                self.logger.debug(f"ternary_expression: {node!r}")
-                condition = node.child_by_field_name("condition")
-                assert condition, "condition is required as per the grammar"
-                self.logger.debug(f"condition: {condition}")
-
-                consequence = node.child_by_field_name("consequence")
-                assert consequence, "consequence is required as per the grammar"
-                arcs.append((node.start_point[0] + 1, consequence.start_point[0] + 1))
-                self.logger.debug(f"consequence: {consequence}")
-                alternative = node.child_by_field_name("alternative")
-                assert alternative, "alternative is required as per the grammar"
-                self.logger.debug(f"alternative: {alternative}")
-                arcs.append((node.start_point[0] + 1, alternative.start_point[0] + 1))
-
-            elif node.type == "test_command":
-                self.logger.debug(f"test_command: {node!r}")
-                # TODO
-
-            elif node.type in EXECUTABLE_NODE_TYPES:
-                self.logger.debug(f"{node.type}: {node!r}")
-                arcs.append((node.start_point[0] + 1, self.nearest_next_line(node.end_point[0] + 1)))
-
-            for child in node.children:
-                parse_ast(child)
-
-        parse_ast(self._tree.root_node)
-        extra_lines = set((lineno, (source, destination)) for source, destination in arcs for lineno in (source, destination) if lineno not in self.lines)
-        self.logger.debug(f"extra_lines: {extra_lines}")
-        # assert not extra_lines, f"extra lines in arcs: {extra_lines!r}"
-        # self.logger.debug(arcs)
-        return arcs
-
-    @functools.cached_property
-    def exit_counts(self) -> dict[TLineNo, int]:
-        lines: dict[TLineNo, list[int]] = defaultdict(list)
-
-        for source, destination in self.arcs:
-            lines[source].append(destination)
-
-        return { source: len(destinations) for source, destinations in lines.items() }
-
-    # def source_token_lines(self):
-    #     pass
-
-class ShellFileReporter(FileReporter):
+class ShellFileReporter(coverage.FileReporter):
     exclude_regex: str
     _content: str | None = None
     _parser: ShellFileParser | None = None
@@ -334,7 +89,7 @@ class ShellFileReporter(FileReporter):
 
     def translate_lines(self, lines: Iterable[TLineNo]) -> set[TLineNo]:
         translated_lines = set(lines)
-        logger.debug(f"[{self.filename}] translated_lines: {translated_lines}")
+        logger.debug(f"[{os.path.basename(self.filename)}] translated_lines: {translated_lines}")
         return translated_lines
 
     def excluded_lines(self) -> set[TLineNo]:
@@ -344,13 +99,16 @@ class ShellFileReporter(FileReporter):
         return set((source, destination) for source, destination in self.parser.arcs if source != destination)
 
     def translate_arcs(self, arcs: Iterable[TArc]) -> set[TArc]:
+        logger.debug(f"[{os.path.basename(self.filename)}] arcs: {arcs}")
         translated_arcs = set().union(*(self.parser.arc_translations.get(arc, {arc}) for arc in arcs))
-        logger.debug(f"[{self.filename}] translated_arcs: {translated_arcs}")
-        unrecognized_arcs = set(self.parser.arcs) - translated_arcs 
-        logger.warning(f"[{self.filename}] unrecognized_arcs: {unrecognized_arcs}")
+        logger.debug(f"[{os.path.basename(self.filename)}] translated_arcs: {translated_arcs}")
+        # self_loops = set((source, destination) for source, destination in set(self.parser.arcs) if source == destination)
+        unrecognized_arcs = translated_arcs - set(self.parser.arcs) # - self_loops
         negatives = set(arc for arc in unrecognized_arcs if -1 in arc)
-        final_arcs = translated_arcs - (unrecognized_arcs - negatives)
-        logger.debug(f"[{self.filename} final_arcs: {final_arcs}")
+        unrecognized_arcs = unrecognized_arcs - negatives
+        logger.warning(f"[{os.path.basename(self.filename)}] unrecognized_arcs: {unrecognized_arcs}")
+        final_arcs = translated_arcs - unrecognized_arcs
+        logger.debug(f"[{os.path.basename(self.filename)} final_arcs: {final_arcs}")
         return final_arcs
 
     def exit_counts(self) -> dict[TLineNo, int]:
@@ -393,11 +151,12 @@ class CovLineParser:
             return
 
         for line in lines:
-            if "COV:::" not in line:
+            if "+:::COV:::" not in line:
                 continue
 
             try:
-                _, path_, funcname, lineno_, _ = line.split(":::", maxsplit=4)
+                replicating_characters, _, caller_filename, caller_lineno, path_, funcname, lineno_, _ = line.split(":::", maxsplit=7)
+                indirections = len(replicating_characters) - 1
                 lineno = int(lineno_)
                 path = Path(path_).absolute()
             except ValueError as e:
@@ -408,6 +167,7 @@ class CovLineParser:
             previous_line = previous_lines[-1] if previous_lines else -1
             self.arc_data[str(path)].append((previous_line, lineno))
             self._previous_lines.append((str(path), funcname, lineno))
+            logger.info(f"filename: {path.name}, line: {line}, indirections: {indirections}, arc: {self.arc_data[str(path)][-1]}")
 
     def flush(self) -> None:
         self.parse(b"\n")
@@ -439,6 +199,7 @@ class CoverageWriter:
         )
 
         if self.plugin.branch:
+            logger.info(f"arc_data: {arc_data}")
             coverage_data.add_arcs(arc_data)
         else: # pragma: false negative
             coverage_data.add_lines(line_data)
@@ -510,10 +271,12 @@ def init_helper(fifo_path: Path) -> Path:
     helper_path = Path(TMP_PATH, f"coverage-sh.{filename_suffix()}.sh")
     helper_path.write_text(
         rf"""#!/usr/bin/env bash
-PS4="COV:::\${{BASH_SOURCE}}:::\${{FUNCNAME:-<global>}}:::\${{LINENO}}:::"
+PS4="+:::COV:::\${{BASH_SOURCE[1]:-<global>}}:::\${{BASH_LINENO[0]:--1}}:::\${{BASH_SOURCE}}:::\${{FUNCNAME:-<global>}}:::\${{COVERAGE_SH_OVERRIDE_LINENO:-\${{LINENO}}}}:::"
 exec {{BASH_XTRACEFD}}>>"{fifo_path!s}"
 export BASH_XTRACEFD
-set -x
+set -E -x
+trap 'COVERAGE_SH_OVERRIDE_LINENO=-1 >&{{BASH_XTRACEFD}}' EXIT
+trap 'COVERAGE_SH_OVERRIDE_LINENO=-1 >&{{BASH_XTRACEFD}}' ERR
 """
     )
     helper_path.chmod(mode=stat.S_IRUSR | stat.S_IWUSR)
@@ -596,7 +359,7 @@ def _iterdir(path: Path) -> Iterator[Path]:
             yield from _iterdir(p)
 
 
-class ShellPlugin(CoveragePlugin):
+class ShellPlugin(coverage.CoveragePlugin):
     config: TConfigurable
     _helper_path: Path | None = None
 
@@ -649,7 +412,7 @@ class ShellPlugin(CoveragePlugin):
     def _is_relevant(path: Path) -> bool:
         return magic.from_file(path.resolve(), mime=True) in SUPPORTED_MIME_TYPES
 
-    def file_tracer(self, filename: str) -> FileTracer | None:  # noqa: ARG002
+    def file_tracer(self, filename: str) -> coverage.FileTracer | None:  # noqa: ARG002
         return None
 
     @property

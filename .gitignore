@@ -18,3 +18,4 @@ wheels/
 !.coveragerc
 
 .DS_Store
+*.swp

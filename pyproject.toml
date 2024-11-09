@@ -91,12 +91,13 @@ ignore = [
 strict = true
 
 [tool.pytest.ini_options]
-log_level = "INFO"
-log_format = "%(asctime)s [%(threadName)s] [%(levelname)-s] [%(name)s] (%(filename)s:%(funcName)s:%(lineno)d) %(message)s"
+log_level = "DEBUG"
+log_format = "%(asctime)s [%(threadName).32s] [%(levelname)-s] [%(name)s] (%(module)s:%(funcName)s:%(lineno)d) %(message)s"
 log_date_format = "%Y-%m-%dT%H:%M:%S%z"
 addopts = [
-    "--log-disable=coverage_sh.plugin.coverage_trace",
-    "--log-disable=coverage_sh.plugin.parser",
+    # "--log-disable=coverage_sh.plugin.coverage_trace",
+    # "--log-disable=coverage_sh.parsers",
+    # "--log-disable=coverage_sh.parsers.ShellFileParser.trace",
 ]
 filterwarnings = [
     "ignore:Already imported a file that will be measured.*(coverage_sh/plugin.py|tests/.*) \\(already-imported\\):coverage.exceptions.CoverageWarning",
@@ -116,8 +117,12 @@ source = ["coverage_sh/", "**/site-packages/coverage_sh/"]
 [tool.coverage.report]
 exclude_also = [
     "pragma: false negative",
+    "@overload",
+    "\\.\\.\\.",
     "if TYPE_CHECKING:",
     "if __name__ == [\"']__main__[\"']:",
+    "case _ as unreachable[^:]*:",
+    "assert_never",
 ]
 
 [tool.coverage.coverage_conditional_plugin.rules]
