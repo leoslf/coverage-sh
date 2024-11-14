@@ -109,6 +109,8 @@ addopts = [
     # "--log-disable=coverage_sh.plugin.coverage_trace",
     # "--log-disable=coverage_sh.parsers",
     # "--log-disable=coverage_sh.parsers.ShellFileParser.trace",
+    "--cov-report=term-missing",
+    "--cov=.",
 ]
 filterwarnings = [
     "ignore:Already imported a file that will be measured.*(coverage_sh/plugin.py|tests/.*) \\(already-imported\\):coverage.exceptions.CoverageWarning",

@@ -39,3 +39,7 @@ def dropuntil(predicate: Any, iterable: Iterable[T]) -> Any:
 def find_index(predicate: Callable[[T], bool], iterable: Iterable[T]) -> Optional[int]:
     return next((i for i, value in enumerate(iterable) if predicate(value)), None)
 
+def subclasses(cls: type[T]) -> Generator[type[T]]:
+    for subclass in cls.__subclasses__():
+        yield subclass
+        yield from subclasses(subclass)
