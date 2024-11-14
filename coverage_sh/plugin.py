@@ -44,7 +44,8 @@ else: # pragma: no-cover-if-python-lt-39
     ArcData = dict[str, list[TArc]]
     PreviousLineData = dict[str, TLineNo]
 
-from coverage_sh.parsers import ShellFileParser
+from coverage_sh.models import ShellFile
+from coverage_sh.parsers import parse # ShellFileParser
 
 TMP_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))  # noqa: S108
 TRACEFILE_PREFIX = "shelltrace"
@@ -55,37 +56,41 @@ logger = logging.getLogger(__name__)
 class ShellFileReporter(coverage.FileReporter):
     exclude_regex: str
     _content: str | None = None
-    _parser: ShellFileParser | None = None
+    # _parser: ShellFileParser | None = None
+    shell_file: ShellFile
+
 
     def __init__(self, filename: str, exclude_regex: str = ""):
         super().__init__(filename)
 
-        self.path = Path(filename)
-        self.exclude_regex = exclude_regex
+        # self.path = Path(filename)
+        self.shell_file = parse(filename, exclude_regex=exclude_regex)
+        # self.exclude_regex = exclude_regex
 
-    @property
-    def parser(self) -> ShellFileParser:
-        if self._parser is None:
-            self._parser = ShellFileParser(
-                self.filename,
-                self.source(),
-                exclude=self.exclude_regex,
-            )
-        return self._parser
+    # @property
+    # def parser(self) -> ShellFileParser:
+    #     if self._parser is None:
+    #         self._parser = ShellFileParser(
+    #             self.filename,
+    #             self.source(),
+    #             exclude=self.exclude_regex,
+    #         )
+    #     return self._parser
 
-    def source(self) -> str:
-        if self._content is None:
-            if not self.path.is_file():
-                return ""
-            try:
-                self._content = self.path.read_text()
-            except UnicodeDecodeError:
-                return ""
+    # def source(self) -> str:
+    #     if self._content is None:
+    #         if not self.path.is_file():
+    #             return ""
+    #         try:
+    #             self._content = self.path.read_text()
+    #         except UnicodeDecodeError:
+    #             return ""
 
-        return self._content
+    #     return self._content
 
     def lines(self) -> set[TLineNo]:
-        return self.parser.lines
+        # return self.parser.lines
+        return self.shell_file.lines
 
     def translate_lines(self, lines: Iterable[TLineNo]) -> set[TLineNo]:
         translated_lines = set(lines)
@@ -93,17 +98,21 @@ class ShellFileReporter(coverage.FileReporter):
         return translated_lines
 
     def excluded_lines(self) -> set[TLineNo]:
-        return self.parser.excluded_lines
+        # return self.parser.excluded_lines
+        return self.shell_file.excluded_lines
 
     def arcs(self) -> set[tuple[int, int]]:
-        return set((source, destination) for source, destination in self.parser.arcs if source != destination)
+        # return set((source, destination) for source, destination in self.parser.arcs if source != destination)
+        return self.shell_file.arcs
 
     def translate_arcs(self, arcs: Iterable[TArc]) -> set[TArc]:
         logger.debug(f"[{os.path.basename(self.filename)}] arcs: {arcs}")
-        translated_arcs = set().union(*(self.parser.arc_translations.get(arc, {arc}) for arc in arcs))
+        # translated_arcs = set().union(*(self.parser.arc_translations.get(arc, {arc}) for arc in arcs))
+        translated_arcs = set().union(*(self.shell_file.arc_translations.get(arc, {arc}) for arc in arcs))
         logger.debug(f"[{os.path.basename(self.filename)}] translated_arcs: {translated_arcs}")
         # self_loops = set((source, destination) for source, destination in set(self.parser.arcs) if source == destination)
-        unrecognized_arcs = translated_arcs - set(self.parser.arcs) # - self_loops
+        # unrecognized_arcs = translated_arcs - set(self.parser.arcs) # - self_loops
+        unrecognized_arcs = translated_arcs - set(self.shell_file.arcs) # - self_loops
         negatives = set(arc for arc in unrecognized_arcs if -1 in arc)
         unrecognized_arcs = unrecognized_arcs - negatives
         logger.warning(f"[{os.path.basename(self.filename)}] unrecognized_arcs: {unrecognized_arcs}")
@@ -112,7 +121,8 @@ class ShellFileReporter(coverage.FileReporter):
         return final_arcs
 
     def exit_counts(self) -> dict[TLineNo, int]:
-        return self.parser.exit_counts
+        # return self.parser.exit_counts
+        return self.shell_file.exit_counts
 
     # def source_token_lines(self):
     #     return self.parser.source_token_lines()
@@ -274,9 +284,9 @@ def init_helper(fifo_path: Path) -> Path:
 PS4="+:::COV:::\${{BASH_SOURCE[1]:-<global>}}:::\${{BASH_LINENO[0]:--1}}:::\${{BASH_SOURCE}}:::\${{FUNCNAME:-<global>}}:::\${{COVERAGE_SH_OVERRIDE_LINENO:-\${{LINENO}}}}:::"
 exec {{BASH_XTRACEFD}}>>"{fifo_path!s}"
 export BASH_XTRACEFD
-set -E -x
-trap 'COVERAGE_SH_OVERRIDE_LINENO=-1 >&{{BASH_XTRACEFD}}' EXIT
-trap 'COVERAGE_SH_OVERRIDE_LINENO=-1 >&{{BASH_XTRACEFD}}' ERR
+set -x
+# trap 'COVERAGE_SH_OVERRIDE_LINENO=-1 >&{{BASH_XTRACEFD}}' EXIT
+# trap 'COVERAGE_SH_OVERRIDE_LINENO=-1 >&{{BASH_XTRACEFD}}' ERR
 """
     )
     helper_path.chmod(mode=stat.S_IRUSR | stat.S_IWUSR)

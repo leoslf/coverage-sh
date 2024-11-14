@@ -8,8 +8,13 @@ authors = [
 dependencies = [
     "coverage[toml]>=7.3.3",
     "python-magic>=0.4.27",
-    "tree-sitter<0.22",
-    "tree-sitter-languages>=1.8.0",
+    "tree-sitter>=0.23.2",
+    "tree-sitter-bash>=0.23.3",
+    "sortedcontainers>=2.4.0,<3.0.0",
+    # itertools.pairwise
+    "more-itertools>=10.5.0,<11.0.0",
+    # TypeGuard, Self
+    "typing-extensions>=4.12.2; python_version<\"3.10\"",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -29,10 +34,16 @@ classifiers = [
 [project.optional-dependencies]
 dev = [
     "ruff==0.3.2",
-    "mypy>=1.9.0",
+    "mypy>=1.13.0",
+    "sortedcontainers-stubs",
+    # "types-tree-sitter-languages>=1.10.0.20240201",
+    "coverage_sh[tests]",
+]
+tests = [
     "pytest>=7.4.3",
+    "pytest-datafiles>=3.0.0",
+    "pytest-cov>=6.0.0",
     "setuptools>=69.0.2",
-    "types-tree-sitter-languages>=1.10.0.20240201",
     "coverage-conditional-plugin>=0.9.0,<0.10.0",
 ]
 
@@ -130,4 +141,3 @@ no-cover-if-python-gte-39 = "sys_version_info >= (3, 9)"
 no-cover-if-python-lt-39 = "sys_version_info < (3, 9)"
 no-cover-if-python-gte-310 = "sys_version_info >= (3, 10)"
 no-cover-if-python-lt-310 = "sys_version_info < (3, 10)"
-
